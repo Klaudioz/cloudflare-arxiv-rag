@@ -141,31 +141,23 @@ describe('Middleware Integration Tests', () => {
 
   describe('Validator', () => {
     it('should validate search requests', () => {
-      const validator = new Validator();
-
-      const validData = { query: 'test', top_k: 5 };
-      expect(() => validator.validateSearchRequest(validData)).not.toThrow();
+      const validData = { query: 'test', max_results: 5 };
+      expect(() => Validator.validateSearchRequest(validData)).not.toThrow();
     });
 
     it('should reject invalid search requests', () => {
-      const validator = new Validator();
-
-      const invalidData = { top_k: 5 }; // Missing query
-      expect(() => validator.validateSearchRequest(invalidData)).toThrow();
+      const invalidData = { max_results: 5 }; // Missing query
+      expect(() => Validator.validateSearchRequest(invalidData)).toThrow();
     });
 
     it('should validate RAG requests', () => {
-      const validator = new Validator();
-
       const validData = { query: 'What are transformers?', top_k: 3 };
-      expect(() => validator.validateRAGRequest(validData)).not.toThrow();
+      expect(() => Validator.validateRAGRequest(validData)).not.toThrow();
     });
 
     it('should enforce max constraints', () => {
-      const validator = new Validator();
-
       const data = { query: 'test'.repeat(10000), top_k: 50 };
-      expect(() => validator.validateRAGRequest(data)).toThrow();
+      expect(() => Validator.validateRAGRequest(data)).toThrow();
     });
   });
 
