@@ -23,6 +23,32 @@ const getStatus = (code: number) => code as any;
 
 const app = new Hono<{ Bindings: Env }>();
 
+// Root route
+app.get('/', (c) => {
+  return c.json({
+    service: 'Cloudflare arXiv RAG',
+    status: 'operational',
+    version: '0.1.0',
+    endpoints: {
+      health: 'GET /health',
+      search: {
+        keyword: 'POST /api/v1/search/keyword',
+        semantic: 'POST /api/v1/search/semantic',
+        hybrid: 'POST /api/v1/search/hybrid'
+      },
+      rag: {
+        ask: 'POST /api/v1/rag/ask',
+        stream: 'POST /api/v1/rag/stream'
+      },
+      papers: {
+        ingest: 'POST /api/v1/papers/ingest',
+        daily: 'GET /api/v1/papers/daily'
+      }
+    },
+    docs: 'https://github.com/Klaudioz/cloudflare-arxiv-rag'
+  });
+});
+
 // Register routers
 app.route('/api/v1/papers', papersRouter);
 app.route('/api/v1/search', searchRouter);
