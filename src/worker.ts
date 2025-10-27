@@ -4,12 +4,15 @@ import { Validator, formatError, isAppError, RateLimiter, AuthManager, RateLimit
 import { ConfigManager } from './config';
 import { Analytics } from './utils';
 import { papersRouter } from './routes/papers';
+import AISearchSetupService from './services/ai-search-setup';
 
 interface Env {
   AI: Ai;
   ANALYTICS: AnalyticsEngineDataPoint;
   CACHE?: KVNamespace;
   ADMIN_API_KEY?: string;
+  CLOUDFLARE_ACCOUNT_ID?: string;
+  CLOUDFLARE_API_TOKEN?: string;
 }
 
 // Helper to convert number to Hono status code type
@@ -26,6 +29,9 @@ let analytics: Analytics;
 let aiSearchClient: AISearchClient;
 let rateLimiter: RateLimiter;
 let authManager: AuthManager;
+
+// Track AI Search setup state
+let aiSearchSetupAttempted = false;
 
 /**
  * Initialize services on first request
@@ -47,6 +53,19 @@ function initializeServices(env: Env) {
       enabled: configManager.get('auth.enabled'),
       apiKeys: configManager.get('auth.apiKeys')
     });
+
+    // Attempt to setup AI Search instance (non-blocking)
+    if (!aiSearchSetupAttempted && env.CLOUDFLARE_ACCOUNT_ID && env.CLOUDFLARE_API_TOKEN) {
+      aiSearchSetupAttempted = true;
+      const setupService = AISearchSetupService.getInstance();
+      setupService.ensureAISearchInstance({
+        accountId: env.CLOUDFLARE_ACCOUNT_ID,
+        apiToken: env.CLOUDFLARE_API_TOKEN,
+        instanceName: configManager.get('aiSearch.instanceName')
+      }).catch(err => {
+        console.error('[Worker Init] AI Search setup error (non-blocking):', err);
+      });
+    }
   }
 }
 

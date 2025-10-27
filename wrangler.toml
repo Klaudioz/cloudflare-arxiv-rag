@@ -7,6 +7,7 @@ compatibility_date = "2025-10-27"
 [env.staging]
 name = "cloudflare-arxiv-rag-staging"
 workers_dev = true
+vars = { CLOUDFLARE_ACCOUNT_ID = "031df5f5a704861375de4d9215011341" }
 
 [[env.staging.ai_search]]
 binding = "AI_SEARCH"
@@ -22,6 +23,7 @@ preview_bucket_name = "arxiv-papers-staging-preview"
 [env.production]
 name = "cloudflare-arxiv-rag-prod"
 workers_dev = true
+vars = { CLOUDFLARE_ACCOUNT_ID = "031df5f5a704861375de4d9215011341" }
 
 [[env.production.ai_search]]
 binding = "AI_SEARCH"
