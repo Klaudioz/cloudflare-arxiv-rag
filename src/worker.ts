@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { AISearchClient, ArxivClient } from './services';
 import { ConfigManager, Validator, formatError, isAppError, ValidationError } from './middleware';
 import { Analytics } from './utils';
+import { papersRouter } from './routes/papers';
 
 interface Env {
   AI: Ai;
@@ -10,6 +11,9 @@ interface Env {
 }
 
 const app = new Hono<{ Bindings: Env }>();
+
+// Register routers
+app.route('/api/v1/papers', papersRouter);
 
 // Initialize services
 let configManager: ConfigManager;
