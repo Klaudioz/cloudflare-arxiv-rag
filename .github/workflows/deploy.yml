@@ -38,9 +38,8 @@ jobs:
       - name: Build TypeScript
         run: npm run build
 
-      # TODO: Fix integration test failures before enabling
-      # - name: Run tests
-      #   run: npm run test
+      - name: Run tests
+        run: npm run test -- --run
 
   deploy-staging:
     needs: build

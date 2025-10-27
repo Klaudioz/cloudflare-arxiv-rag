@@ -33,10 +33,10 @@ jobs:
         run: npm run build
 
       - name: Run tests
-        run: npm run test
+        run: npm run test -- --run
 
       - name: Generate coverage
-        run: npm run test:coverage
+        run: npm run test:coverage -- --run
 
       - name: Upload coverage reports
         uses: codecov/codecov-action@v3
