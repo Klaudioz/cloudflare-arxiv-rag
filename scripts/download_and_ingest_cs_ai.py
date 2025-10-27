@@ -305,14 +305,35 @@ def main(storage_path: Path, max_papers=None):
     
     # Check if we have cs_ai_ids.txt from previous run
     cs_ai_ids_file = storage_path / "cs_ai_ids.txt"
+    ids_checkpoint_file = storage_path / "ids_checkpoint.txt"  # Track last successful batch
+    
     if not cs_ai_ids_file.exists():
-        print(f"  Fetching CS.AI papers from arXiv API (max: {effective_max})...")
+        print(f"  Fetching CS.AI papers from arXiv API ({effective_max:,} total)...")
         base_url = "http://export.arxiv.org/api/query"
         paper_ids = []
         start = 0
         batch_size = 2000
+        last_checkpoint = 0
+        
+        # Check for checkpoint
+        if ids_checkpoint_file.exists():
+            try:
+                with open(ids_checkpoint_file) as f:
+                    last_checkpoint = int(f.read().strip())
+                    start = last_checkpoint
+                    print(f"  Resuming from batch starting at {start}...")
+            except:
+                pass
+        
+        # Load any previously fetched IDs
+        if cs_ai_ids_file.exists():
+            with open(cs_ai_ids_file) as f:
+                paper_ids = [line.strip() for line in f if line.strip()]
         
         while len(paper_ids) < effective_max:
+            batch_num = (start // batch_size) + 1
+            print(f"  Fetching batch {batch_num} (papers {start}-{start + batch_size})...")
+            
             params = {
                 'search_query': 'cat:cs.AI',
                 'start': start,
@@ -322,13 +343,20 @@ def main(storage_path: Path, max_papers=None):
             }
             
             try:
-                response = requests.get(base_url, params=params, timeout=30)
+                response = requests.get(base_url, params=params, timeout=60)
                 response.raise_for_status()
             except requests.RequestException as e:
                 print(f"  ERROR fetching from API: {e}")
+                print(f"  Checkpoint: {start} papers")
                 break
             
-            root = ET.fromstring(response.content)
+            try:
+                root = ET.fromstring(response.content)
+            except ET.ParseError as e:
+                print(f"  ERROR parsing XML: {e}")
+                print(f"  Checkpoint: {start} papers")
+                break
+            
             found_count = 0
             
             for entry in root.findall('.//{http://www.w3.org/2005/Atom}entry'):
@@ -342,27 +370,39 @@ def main(storage_path: Path, max_papers=None):
                     found_count += 1
             
             if found_count == 0:
+                print(f"  No more papers found. Total: {len(paper_ids):,}")
                 break
             
+            # Save checkpoint and IDs after each batch
+            with open(ids_checkpoint_file, "w") as f:
+                f.write(str(start + batch_size))
+            with open(cs_ai_ids_file, "w") as f:
+                for pid in paper_ids:
+                    f.write(pid + "\n")
+            
+            print(f"  Fetched {len(paper_ids):,} papers so far")
             start += batch_size
             time.sleep(2)  # Rate limiting
         
-        # Save IDs for resume capability (save ALL fetched, not just the limit)
-        with open(cs_ai_ids_file, "w") as f:
-            for pid in paper_ids:
-                f.write(pid + "\n")
+        # Remove checkpoint after successful completion
+        try:
+            os.remove(ids_checkpoint_file)
+        except:
+            pass
     else:
-        # Load from existing file, but respect max_papers limit
+        # Load from existing file
         with open(cs_ai_ids_file, "r") as f:
             all_ids = [line.strip() for line in f if line.strip()]
-        paper_ids = all_ids[:effective_max]
+        paper_ids = all_ids if not max_papers else all_ids[:max_papers]
+        print(f"  Loaded {len(paper_ids):,} papers from cache")
     
-    print(f"  Loaded {len(paper_ids)} papers for download")
+    print(f"  Total papers to download: {len(paper_ids):,}")
     
     # Step 2: Parallel download
-    print(f"\n[Step 2] Downloading {len(paper_ids)} PDFs (parallel)...")
+    print(f"\n[Step 2] Downloading {len(paper_ids):,} PDFs (parallel)...")
     results = {"success": 0, "failed": 0, "skipped": 0}
     all_papers = []
+    failed_ids = []
     
     with ThreadPoolExecutor(max_workers=8) as executor:
         futures = {executor.submit(download_paper, pid, pdf_dir): pid for pid in paper_ids}
@@ -374,20 +414,34 @@ def main(storage_path: Path, max_papers=None):
             progress_iterator = as_completed(futures)
         
         for future in progress_iterator:
-            result = future.result()
-            status = result.get("status")
-            results[status] += 1
-            
-            if status == "success":
-                all_papers.append(result)
-            
-            # Log to file
-            with open(log_file, "a") as f:
-                f.write(json.dumps(result) + "\n")
+            try:
+                result = future.result()
+                status = result.get("status")
+                results[status] += 1
+                
+                if status == "success":
+                    all_papers.append(result)
+                elif status == "failed":
+                    failed_ids.append(result.get("arxiv_id"))
+                
+                # Log to file
+                with open(log_file, "a") as f:
+                    f.write(json.dumps(result) + "\n")
+            except Exception as e:
+                print(f"  [ERROR] Future execution error: {e}")
+                results["failed"] += 1
     
-    print(f"\n  ✓ Success: {results['success']}")
-    print(f"  ✗ Failed: {results['failed']}")
-    print(f"  ⊘ Skipped: {results['skipped']}")
+    print(f"\n  ✓ Success: {results['success']:,}")
+    print(f"  ✗ Failed: {results['failed']:,}")
+    print(f"  ⊘ Skipped: {results['skipped']:,}")
+    
+    # Save failed IDs for reference
+    if failed_ids:
+        failed_file = storage_path / "failed_ids.txt"
+        with open(failed_file, "w") as f:
+            for fid in failed_ids:
+                f.write(fid + "\n")
+        print(f"  Failed IDs saved to: {failed_file}")
     
     # Step 3: Write JSONL - regenerate for ALL downloaded PDFs
     print(f"\n[Step 3] Writing JSONL manifest for all downloaded PDFs...")
