@@ -81,15 +81,25 @@ def human_bytes(n):
     return f"{n:.2f} PB"
 
 
-def aws_s3_cp(s3_path, dest_path, requester_pays=True):
-    """Download from S3 using AWS CLI."""
-    req = "--request-payer requester" if requester_pays else ""
-    cmd = f'aws s3 cp "{s3_path}" "{dest_path}" {req} 2>&1'
+def download_pdf_direct(arxiv_id, dest_path):
+    """Download PDF directly from arXiv using HTTP."""
+    # Normalize arxiv_id to use in URL
+    if '/' in arxiv_id:
+        # Old format: cs/9408101 -> cs/9408101
+        url = f"https://arxiv.org/pdf/{arxiv_id}.pdf"
+    else:
+        # New format: 2510.20994 -> 2510.20994
+        url = f"https://arxiv.org/pdf/{arxiv_id}.pdf"
+    
     try:
-        result = run_cmd(cmd, check=False)
-        return result.returncode == 0
-    except Exception:
-        return False
+        response = requests.get(url, timeout=30, stream=True)
+        if response.status_code == 200:
+            with open(dest_path, 'wb') as f:
+                f.write(response.content)
+            return True
+    except Exception as e:
+        pass
+    return False
 
 
 def extract_text_from_pdf(pdf_path, max_length=5000):
@@ -161,18 +171,16 @@ def download_paper(arxiv_id, pdf_dir, max_retries=3):
     if pdf_path.exists():
         return {"status": "skipped", "arxiv_id": arxiv_id}
     
-    # Normalize arxiv_id: handle both old (cs/9408101) and new (2510.20994) formats
-    normalized_id = arxiv_id.replace('/', '')  # Convert cs/9408101 -> cs9408101
-    
-    # Try to download from arXiv S3 (using normalized format)
-    # S3 path format: s3://arxiv/pdf/YYMM/XXXXX.pdf
-    s3_path = f"s3://arxiv/pdf/{normalized_id[:4]}/{normalized_id[4:]}.pdf"
-    
+    # Download from arXiv using HTTP (direct)
+    downloaded = False
     for attempt in range(max_retries):
-        if aws_s3_cp(s3_path, str(pdf_path), requester_pays=True):
+        if download_pdf_direct(arxiv_id, str(pdf_path)):
+            downloaded = True
             break
-    else:
-        return {"status": "failed", "arxiv_id": arxiv_id, "error": "S3 download failed"}
+        time.sleep(0.5)  # Small delay between retries
+    
+    if not downloaded:
+        return {"status": "failed", "arxiv_id": arxiv_id, "error": "PDF download failed"}
     
     # Extract text from PDF
     text = extract_text_from_pdf(str(pdf_path))
