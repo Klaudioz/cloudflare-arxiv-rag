@@ -341,25 +341,65 @@ def main(storage_path: Path, max_papers=None):
     print(f"  ✗ Failed: {results['failed']}")
     print(f"  ⊘ Skipped: {results['skipped']}")
     
-    # Step 3: Write JSONL
-    print(f"\n[Step 3] Writing JSONL manifest...")
+    # Step 3: Write JSONL - regenerate for ALL downloaded PDFs
+    print(f"\n[Step 3] Writing JSONL manifest for all downloaded PDFs...")
+    
+    # Get all downloaded PDF files
+    pdf_files = list(pdf_dir.glob("*.pdf"))
+    print(f"  Found {len(pdf_files)} PDF files")
+    
+    ingested_count = 0
     with open(output_jsonl, "w") as f:
-        for paper in all_papers:
-            # Convert to ingestion format
+        for pdf_file in pdf_files:
+            # Reconstruct arxiv_id from filename (reverse normalization)
+            # cs-9308101.pdf -> cs/9308101
+            # 1706-03762.pdf -> 1706.03762
+            filename = pdf_file.stem
+            
+            # Check if it's old format (contains letters) or new format (all digits/dashes)
+            if any(c.isalpha() for c in filename):
+                # Old format: cs-9308101 -> cs/9308101
+                arxiv_id = filename.replace('-', '/')
+            else:
+                # New format: 1706-03762 -> 1706.03762
+                arxiv_id = filename.replace('-', '.', 1)  # Replace first dash only
+            
+            # Try to get metadata from log first
+            paper_metadata = None
+            for paper in all_papers:
+                if paper["arxiv_id"] == arxiv_id:
+                    paper_metadata = paper
+                    break
+            
+            # If not in log, create minimal metadata
+            if not paper_metadata:
+                text = extract_text_from_pdf(str(pdf_file))
+                paper_metadata = {
+                    "arxiv_id": arxiv_id,
+                    "title": f"arXiv {arxiv_id}",
+                    "abstract": text[:500] if text else f"Paper {arxiv_id}",
+                    "authors": ["Unknown"],
+                    "published": "2024-01-01",
+                    "extracted_text": text,
+                    "pdf_url": f"https://arxiv.org/pdf/{arxiv_id}.pdf"
+                }
+            
+            # Write to JSONL
             ingestion_doc = {
-                "id": paper["arxiv_id"],
-                "title": paper["title"],
-                "abstract": paper["abstract"],
-                "authors": paper["authors"],
-                "published": paper["published"],
+                "id": arxiv_id,
+                "title": paper_metadata.get("title", f"arXiv {arxiv_id}"),
+                "abstract": paper_metadata.get("abstract", ""),
+                "authors": paper_metadata.get("authors", ["Unknown"]),
+                "published": paper_metadata.get("published", "2024-01-01"),
                 "category": "cs.AI",
-                "arxiv_id": paper["arxiv_id"],
-                "pdf_url": paper["pdf_url"],
-                "full_text": paper["extracted_text"] or paper["abstract"]
+                "arxiv_id": arxiv_id,
+                "pdf_url": paper_metadata.get("pdf_url", f"https://arxiv.org/pdf/{arxiv_id}.pdf"),
+                "full_text": paper_metadata.get("extracted_text") or paper_metadata.get("abstract", "")
             }
             f.write(json.dumps(ingestion_doc) + "\n")
+            ingested_count += 1
     
-    print(f"  ✓ Wrote {len(all_papers)} papers to {output_jsonl}")
+    print(f"  ✓ Wrote {ingested_count} papers to {output_jsonl}")
     
     # Step 4: Summary
     print(f"\n[Step 4] Summary")
