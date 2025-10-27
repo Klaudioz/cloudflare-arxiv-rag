@@ -84,11 +84,11 @@ def human_bytes(n):
 def aws_s3_cp(s3_path, dest_path, requester_pays=True):
     """Download from S3 using AWS CLI."""
     req = "--request-payer requester" if requester_pays else ""
-    cmd = f'aws s3 cp "{s3_path}" "{dest_path}" {req} 2>/dev/null'
+    cmd = f'aws s3 cp "{s3_path}" "{dest_path}" {req} 2>&1'
     try:
-        result = run_cmd(cmd, check=True)
-        return True
-    except RuntimeError:
+        result = run_cmd(cmd, check=False)
+        return result.returncode == 0
+    except Exception:
         return False
 
 
@@ -161,8 +161,12 @@ def download_paper(arxiv_id, pdf_dir, max_retries=3):
     if pdf_path.exists():
         return {"status": "skipped", "arxiv_id": arxiv_id}
     
-    # Try to download from arXiv S3
-    s3_path = f"s3://arxiv/pdf/{arxiv_id[:4]}/{arxiv_id[4:8]}/{arxiv_id}.pdf"
+    # Normalize arxiv_id: handle both old (cs/9408101) and new (2510.20994) formats
+    normalized_id = arxiv_id.replace('/', '')  # Convert cs/9408101 -> cs9408101
+    
+    # Try to download from arXiv S3 (using normalized format)
+    # S3 path format: s3://arxiv/pdf/YYMM/XXXXX.pdf
+    s3_path = f"s3://arxiv/pdf/{normalized_id[:4]}/{normalized_id[4:]}.pdf"
     
     for attempt in range(max_retries):
         if aws_s3_cp(s3_path, str(pdf_path), requester_pays=True):
