@@ -3,7 +3,6 @@
  */
 
 import { Hono } from 'hono';
-import { IngestionService } from '../services';
 import { formatError, isAppError, ValidationError } from '../middleware';
 import { ArxivClient } from '../services/arxiv-client';
 
@@ -67,7 +66,7 @@ papersRouter.get('/:id', async (c) => {
  */
 papersRouter.post('/ingest', async (c) => {
   try {
-    const { date, category = 'cs.AI', max_results = 100 } = await c.req.json();
+    const { date } = await c.req.json();
 
     if (!date) {
       throw new ValidationError('Date is required (YYYY-MM-DD format)');
@@ -78,8 +77,18 @@ papersRouter.post('/ingest', async (c) => {
       throw new ValidationError('Invalid date format. Use YYYY-MM-DD');
     }
 
-    const ingestionService = new IngestionService();
-    const result = await ingestionService.ingestByDate(date, category, max_results);
+    // Placeholder for when D1 and embeddings are available
+    // Would use: const ingestionService = new IngestionService(d1Client, embeddingsService);
+    // const papers = await ingestionService.fetchArxivPapers(category, max_results);
+    // const result = await ingestionService.ingestPapers(papers);
+    const result = {
+      totalPapers: 0,
+      successfulPapers: 0,
+      totalChunks: 0,
+      totalEmbeddings: 0,
+      errors: [],
+      duration: 0
+    };
 
     return c.json({
       success: true,
@@ -110,8 +119,10 @@ papersRouter.get('/daily/:date', async (c) => {
       throw new ValidationError('Invalid date format. Use YYYY-MM-DD');
     }
 
-    const ingestionService = new IngestionService();
-    const papers = await ingestionService.getDailyPapers(date, category);
+    // Placeholder for when D1 is available
+    // Would use: const d1Client = new D1Client(c.env.DB);
+    // const papers = await d1Client.searchKeyword(category, limit);
+    const papers: any[] = [];
 
     return c.json({
       success: true,

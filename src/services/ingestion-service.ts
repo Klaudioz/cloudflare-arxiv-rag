@@ -1,147 +1,212 @@
 /**
- * Paper ingestion service for processing arXiv papers
+ * Ingestion service for daily paper processing
  */
 
-import { ArxivClient } from './arxiv-client';
-import { ArxivPaper } from '../types';
+import { D1Client } from './d1-client';
+import { EmbeddingsService } from './embeddings-service';
+import { chunkPaperContent } from '../utils/chunking';
+
+export interface ArxivPaper {
+  id: string;
+  title: string;
+  authors: string[];
+  abstract: string;
+  published: string;
+  arxivId: string;
+  category: string;
+  pdfUrl: string;
+}
 
 export interface IngestionResult {
-  papersFetched: number;
-  papersIndexed: number;
-  papersFailed: number;
-  processingTimeMs: number;
-  errors: string[];
+  totalPapers: number;
+  successfulPapers: number;
+  totalChunks: number;
+  totalEmbeddings: number;
+  errors: Array<{ paperId: string; error: string }>;
+  duration: number;
 }
 
 export class IngestionService {
-  private arxivClient: ArxivClient;
-
-  constructor() {
-    this.arxivClient = new ArxivClient();
-  }
+  constructor(
+    private d1Client: D1Client,
+    private embeddingsService: EmbeddingsService
+  ) {}
 
   /**
-   * Ingest papers for a specific date
+   * Process and ingest papers
    */
-  async ingestByDate(
-    date: string,
-    category: string = 'cs.AI',
-    maxResults: number = 100
-  ): Promise<IngestionResult> {
+  async ingestPapers(papers: ArxivPaper[]): Promise<IngestionResult> {
     const startTime = Date.now();
-    const errors: string[] = [];
-
-    try {
-      // Fetch papers from arXiv
-      const papers = await this.arxivClient.fetchByDate(date, category, maxResults);
-
-      if (papers.length === 0) {
-        return {
-          papersFetched: 0,
-          papersIndexed: 0,
-          papersFailed: 0,
-          processingTimeMs: Date.now() - startTime,
-          errors
-        };
-      }
-
-      // Process papers for indexing
-      const processedPapers = this.processPapers(papers);
-
-      // Index papers (in production, would index to AI Search)
-      const indexResult = await this.indexPapers(processedPapers);
-
-      return {
-        papersFetched: papers.length,
-        papersIndexed: indexResult.success,
-        papersFailed: indexResult.failed,
-        processingTimeMs: Date.now() - startTime,
-        errors: [...errors, ...indexResult.errors]
-      };
-    } catch (error) {
-      const errorMsg = String(error);
-      errors.push(errorMsg);
-
-      return {
-        papersFetched: 0,
-        papersIndexed: 0,
-        papersFailed: 0,
-        processingTimeMs: Date.now() - startTime,
-        errors
-      };
-    }
-  }
-
-  /**
-   * Process papers for storage
-   */
-  private processPapers(papers: ArxivPaper[]): ArxivPaper[] {
-    return papers.map((paper) => ({
-      ...paper,
-      // Ensure all required fields are present
-      arxiv_id: paper.arxiv_id || '',
-      title: this.sanitizeText(paper.title || ''),
-      abstract: this.sanitizeText(paper.abstract || ''),
-      authors: paper.authors || [],
-      published_date: paper.published_date || new Date().toISOString(),
-      pdf_url: paper.pdf_url || '',
-      categories: paper.categories || []
-    }));
-  }
-
-  /**
-   * Index papers to AI Search
-   */
-  private async indexPapers(papers: ArxivPaper[]): Promise<{
-    success: number;
-    failed: number;
-    errors: string[];
-  }> {
-    const errors: string[] = [];
-    let successCount = 0;
-    let failureCount = 0;
+    const result: IngestionResult = {
+      totalPapers: papers.length,
+      successfulPapers: 0,
+      totalChunks: 0,
+      totalEmbeddings: 0,
+      errors: [],
+      duration: 0
+    };
 
     for (const paper of papers) {
       try {
-        // In production, this would:
-        // 1. Upload paper data to R2
-        // 2. Trigger AI Search sync
-        // 3. Wait for indexing completion
+        // Insert paper
+        const paperId = await this.d1Client.insertPaper({
+          arxiv_id: paper.arxivId,
+          title: paper.title,
+          abstract: paper.abstract,
+          authors: paper.authors,
+          published_date: paper.published,
+          category: paper.category,
+          pdf_url: paper.pdfUrl
+        });
 
-        successCount++;
+        // Chunk paper content
+        const chunks = chunkPaperContent(paper.abstract, {
+          chunkSize: 512,
+          strategy: 'sentence'
+        });
+
+        // Insert chunks and generate embeddings
+        for (let i = 0; i < chunks.length; i++) {
+          const chunkContent = chunks[i];
+
+          // Insert chunk
+          const chunkId = await this.d1Client.insertChunk({
+            paper_id: paperId,
+            chunk_index: i,
+            content: chunkContent
+          });
+
+          // Generate embedding
+          try {
+            const embedding = await this.embeddingsService.generateEmbedding(chunkContent);
+            await this.d1Client.insertEmbedding(chunkId, embedding);
+            result.totalEmbeddings++;
+          } catch (embError) {
+            console.error(`[IngestionService] Embedding error for chunk ${i}:`, embError);
+            // Continue with next chunk even if embedding fails
+          }
+
+          result.totalChunks++;
+        }
+
+        result.successfulPapers++;
       } catch (error) {
-        failureCount++;
-        errors.push(`Failed to index ${paper.arxiv_id}: ${String(error)}`);
+        console.error(`[IngestionService] Error ingesting paper ${paper.arxivId}:`, error);
+        result.errors.push({
+          paperId: paper.arxivId,
+          error: error instanceof Error ? error.message : 'Unknown error'
+        });
       }
     }
 
-    return { success: successCount, failed: failureCount, errors };
+    result.duration = Date.now() - startTime;
+    return result;
   }
 
   /**
-   * Sanitize text for storage
+   * Fetch papers from arXiv API
    */
-  private sanitizeText(text: string): string {
-    return text
-      .replace(/\n+/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim()
-      .substring(0, 10000); // Limit text length
-  }
-
-  /**
-   * Get daily papers
-   */
-  async getDailyPapers(
-    date: string,
-    category: string = 'cs.AI',
-    maxResults: number = 100
+  async fetchArxivPapers(
+    query: string = 'cat:cs.AI',
+    maxResults: number = 50,
+    startIndex: number = 0
   ): Promise<ArxivPaper[]> {
     try {
-      return await this.arxivClient.fetchByDate(date, category, maxResults);
+      // Construct arXiv API URL
+      const url = new URL('http://export.arxiv.org/api/query');
+      url.searchParams.append('search_query', query);
+      url.searchParams.append('start', startIndex.toString());
+      url.searchParams.append('max_results', maxResults.toString());
+      url.searchParams.append('sortBy', 'submittedDate');
+      url.searchParams.append('sortOrder', 'descending');
+
+      const response = await fetch(url.toString());
+      if (!response.ok) {
+        throw new Error(`arXiv API error: ${response.status}`);
+      }
+
+      const text = await response.text();
+
+      // Parse XML response
+      const papers = this.parseArxivXML(text);
+      return papers;
     } catch (error) {
-      console.error('[IngestionService] Error fetching daily papers:', error);
-      return [];
+      console.error('[IngestionService] Error fetching arXiv papers:', error);
+      throw error;
     }
   }
+
+  /**
+   * Parse arXiv XML response
+   */
+  private parseArxivXML(xml: string): ArxivPaper[] {
+    const papers: ArxivPaper[] = [];
+
+    // Simple regex-based parsing (XML parsing in Workers is limited)
+    const entryRegex = /<entry>([\s\S]*?)<\/entry>/g;
+    let entryMatch;
+
+    while ((entryMatch = entryRegex.exec(xml)) !== null) {
+      const entry = entryMatch[1];
+
+      // Extract fields
+      const idMatch = /<id>http:\/\/arxiv\.org\/abs\/([\d.]+)<\/id>/.exec(entry);
+      const titleMatch = /<title>([\s\S]*?)<\/title>/.exec(entry);
+      const summaryMatch = /<summary>([\s\S]*?)<\/summary>/.exec(entry);
+      const publishedMatch = /<published>([^<]+)<\/published>/.exec(entry);
+      const categoryMatch = /<arxiv:primary_category term="([^"]+)"/.exec(entry);
+
+      if (!idMatch) continue;
+
+      const arxivId = idMatch[1];
+      const title = titleMatch ? this.cleanText(titleMatch[1]) : 'Untitled';
+      const abstract = summaryMatch ? this.cleanText(summaryMatch[1]) : '';
+      const published = publishedMatch ? publishedMatch[1].split('T')[0] : new Date().toISOString().split('T')[0];
+      const category = categoryMatch ? categoryMatch[1] : 'cs.AI';
+
+      // Extract authors
+      const authorMatches = [...entry.matchAll(/<author><name>([^<]+)<\/name><\/author>/g)];
+      const authors = authorMatches.map(m => m[1]);
+
+      papers.push({
+        id: arxivId,
+        arxivId,
+        title,
+        abstract,
+        authors: authors.length > 0 ? authors : ['Unknown'],
+        published,
+        category,
+        pdfUrl: `https://arxiv.org/pdf/${arxivId}.pdf`
+      });
+    }
+
+    return papers;
+  }
+
+  /**
+   * Clean text from XML
+   */
+  private cleanText(text: string): string {
+    return text
+      .replace(/\s+/g, ' ')
+      .replace(/&#\d+;/g, '')
+      .trim();
+  }
+
+  /**
+   * Log ingestion result
+   */
+  async logIngestion(result: IngestionResult, status: 'pending' | 'running' | 'completed' | 'failed'): Promise<void> {
+    await this.d1Client.logIngestion({
+      ingestionDate: new Date().toISOString().split('T')[0],
+      papersFetched: result.totalPapers,
+      papersIndexed: result.successfulPapers,
+      chunksCreated: result.totalChunks,
+      embeddingsGenerated: result.totalEmbeddings,
+      status,
+      errorMessage: result.errors.length > 0 ? `${result.errors.length} errors during ingestion` : undefined
+    });
+  }
 }
+
+export default IngestionService;

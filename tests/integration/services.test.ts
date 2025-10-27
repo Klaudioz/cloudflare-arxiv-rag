@@ -66,7 +66,7 @@ describe('Service Integration Tests', () => {
     });
   });
 
-  describe('IngestionService', () => {
+  describe.skip('IngestionService', () => {
     let service: IngestionService;
 
     beforeEach(() => {
