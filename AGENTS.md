@@ -1170,3 +1170,54 @@ cloudflare dashboard → Billing & Usage
 - `dececdb` - fix: Resolve ESLint errors and configure flat config
 - `2b0cda5` - chore: Add package-lock.json for reproducible builds
 
+
+---
+
+## Cloudflare Infrastructure Status (Oct 27, 2025)
+
+### Live Infrastructure (Actually Deployed)
+
+| Component | Service | Status | Details |
+|-----------|---------|--------|---------|
+| **API (Staging)** | Workers | ✅ Live | https://cloudflare-arxiv-rag-staging.klaudioz.workers.dev |
+| **API (Production)** | Workers | ✅ Live | https://cloudflare-arxiv-rag-prod.klaudioz.workers.dev |
+| **Frontend** | Pages | ✅ Live | https://arxiv-rag.pages.dev |
+| **Object Storage** | R2 | ✅ Created | arxiv-papers-staging, arxiv-papers-prod |
+| **Analytics** | Analytics Engine | ✅ Configured | Metrics collection active |
+| **Testing** | GitHub Actions | ✅ Active | 104/104 tests passing |
+
+### Planned Infrastructure (Code Ready, Not Yet Activated in Dashboard)
+
+| Component | Service | Status | Phase | Location | Notes |
+|-----------|---------|--------|-------|----------|-------|
+| **Vector DB** | D1 | ⏳ Phase 8 | `src/services/d1-client.ts` | Needs Cloudflare Dashboard activation |
+| **DB Schema** | D1 Migrations | ⏳ Phase 8 | `migrations/001-create-schema.sql` | Ready to deploy |
+| **Embeddings** | Workers AI | ⏳ Phase 8 | `src/services/embeddings-service.ts` | @cf/baai/bge-base-en-v1.5 model available |
+| **Chunking** | Utilities | ⏳ Phase 8 | `src/utils/chunking.ts` | Ready for use |
+| **Paper Ingestion** | Workflows | ⏳ Phase 14 | `src/workflows.ts` | Code ready, scheduling pending |
+| **AI Search** | AI Search | ⏳ Not Available | - | Would replace custom RAG implementation |
+
+### Next Steps to Activate
+
+1. **Create D1 Database** (Phase 8):
+   ```bash
+   # Go to Cloudflare Dashboard
+   # Storage & Databases → D1 → Create
+   # Name: arxiv-papers
+   # Then bind to wrangler.toml and deploy
+   ```
+
+2. **Deploy D1 Schema**:
+   ```bash
+   wrangler d1 migrations apply arxiv-papers
+   ```
+
+3. **Integrate Embeddings** (Phase 8):
+   - Workers AI is available
+   - Use EmbeddingsService from code
+   - Test with Workers AI models
+
+4. **Test Full Pipeline** (Phases 9-13):
+   - Build search endpoints
+   - Deploy RAG generation
+   - Connect frontend

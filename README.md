@@ -4,17 +4,27 @@
 
 **Status**: 🚀 Production-ready | **Performance**: +70% faster | **Cost**: -98% cheaper
 
-## Deployment Status (Oct 27, 2025)
+## Cloudflare Deployment Status (Oct 27, 2025)
 
-| Component | Status | URL |
-|-----------|--------|-----|
-| **Staging API** | ✅ Live | https://cloudflare-arxiv-rag-staging.klaudioz.workers.dev |
-| **Production API** | ✅ Live | https://cloudflare-arxiv-rag-prod.klaudioz.workers.dev |
-| **Frontend** | ✅ Live | https://arxiv-rag.pages.dev |
-| **AI Search** | ✅ Automated | Auto-created on deployment (Phase 7) |
-| **R2 Buckets** | ✅ Created | arxiv-papers-staging, arxiv-papers-prod |
-| **Tests** | ✅ 104/104 | All passing in CI/CD |
-| **CI/CD** | ✅ Active | GitHub Actions with automated testing |
+### Live Infrastructure
+
+| Component | Service | Status | Details |
+|-----------|---------|--------|---------|
+| **API (Staging)** | Workers | ✅ Live | https://cloudflare-arxiv-rag-staging.klaudioz.workers.dev |
+| **API (Production)** | Workers | ✅ Live | https://cloudflare-arxiv-rag-prod.klaudioz.workers.dev |
+| **Frontend** | Pages | ✅ Live | https://arxiv-rag.pages.dev |
+| **Object Storage** | R2 | ✅ Created | arxiv-papers-staging, arxiv-papers-prod |
+| **Analytics** | Analytics Engine | ✅ Configured | Metrics collection active |
+| **Monitoring** | CI/CD | ✅ Active | GitHub Actions: 104/104 tests passing |
+
+### Planned Infrastructure (Not Yet Created)
+
+| Component | Service | Status | Phase |
+|-----------|---------|--------|-------|
+| **Vector DB** | D1 | ⏳ Phase 8 | Database and schema ready (code), needs activation |
+| **AI Search** | AI Search | ⏳ Not Available | Requires manual setup in dashboard |
+| **Paper Ingestion** | Workflows | ⏳ Phase 14 | Code ready, scheduled Mon-Fri 6 AM UTC |
+| **Workers AI** | Workers AI | ⏳ Phase 8+ | Available, not yet integrated |
 
 ### All 5 Project Phases Complete ✅
 - Phase 1: Setup & Configuration ✅
