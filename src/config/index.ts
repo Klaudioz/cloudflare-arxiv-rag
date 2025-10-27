@@ -27,6 +27,16 @@ export interface Config {
     enabled: boolean;
     ttlSeconds: number;
   };
+  rateLimit: {
+    enabled: boolean;
+    requestsPerMinute: number;
+    requestsPerHour: number;
+  };
+  auth: {
+    enabled: boolean;
+    apiKeys: string[];
+    jwtSecret?: string;
+  };
 }
 
 export class ConfigManager {
@@ -57,8 +67,28 @@ export class ConfigManager {
       cache: {
         enabled: env?.CACHE_ENABLED !== 'false',
         ttlSeconds: parseInt(env?.CACHE_TTL_SECONDS || '86400')
+      },
+      rateLimit: {
+        enabled: env?.RATE_LIMIT_ENABLED === 'true',
+        requestsPerMinute: parseInt(env?.RATE_LIMIT_PER_MINUTE || '60'),
+        requestsPerHour: parseInt(env?.RATE_LIMIT_PER_HOUR || '1000')
+      },
+      auth: {
+        enabled: env?.AUTH_ENABLED === 'true',
+        apiKeys: this.parseApiKeys(env?.API_KEYS),
+        jwtSecret: env?.JWT_SECRET
       }
     };
+  }
+
+  /**
+   * Parse comma-separated API keys
+   */
+  private parseApiKeys(apiKeysStr?: string): string[] {
+    if (!apiKeysStr) {
+      return [];
+    }
+    return apiKeysStr.split(',').map((key) => key.trim()).filter(Boolean);
   }
 
   getConfig(): Readonly<Config> {

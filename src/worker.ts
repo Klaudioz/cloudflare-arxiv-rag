@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { AISearchClient, ArxivClient } from './services';
-import { ConfigManager, Validator, formatError, isAppError, ValidationError } from './middleware';
+import { ConfigManager, Validator, formatError, isAppError, ValidationError, RateLimiter, AuthManager, RateLimitError } from './middleware';
 import { Analytics } from './utils';
 import { papersRouter } from './routes/papers';
 
@@ -8,6 +8,7 @@ interface Env {
   AI: Ai;
   ANALYTICS: AnalyticsEngineDataPoint;
   CACHE?: KVNamespace;
+  ADMIN_API_KEY?: string;
 }
 
 const app = new Hono<{ Bindings: Env }>();
@@ -20,6 +21,8 @@ let configManager: ConfigManager;
 let analytics: Analytics;
 let aiSearchClient: AISearchClient;
 let arxivClient: ArxivClient;
+let rateLimiter: RateLimiter;
+let authManager: AuthManager;
 
 /**
  * Initialize services on first request
@@ -33,8 +36,63 @@ function initializeServices(env: Env) {
     });
     aiSearchClient = new AISearchClient(env, configManager.get('aiSearch.instanceName'));
     arxivClient = new ArxivClient();
+    rateLimiter = new RateLimiter(env, {
+      enabled: configManager.get('rateLimit.enabled'),
+      requestsPerMinute: configManager.get('rateLimit.requestsPerMinute'),
+      requestsPerHour: configManager.get('rateLimit.requestsPerHour')
+    });
+    authManager = new AuthManager(env, {
+      enabled: configManager.get('auth.enabled'),
+      apiKeys: configManager.get('auth.apiKeys')
+    });
   }
 }
+
+/**
+ * Rate limiting & authentication middleware
+ */
+app.use('*', async (c, next) => {
+  try {
+    initializeServices(c.env);
+
+    // Skip auth for health check
+    if (c.req.path === '/health') {
+      return next();
+    }
+
+    // Authenticate request
+    if (authManager.constructor.prototype.constructor.name === 'AuthManager') {
+      const authConfig = configManager.get('auth.enabled');
+      if (authConfig) {
+        const authContext = await authManager.authenticate(c.req.raw);
+        c.set('auth', authContext);
+      }
+    }
+
+    // Check rate limit
+    const cfConnectingIp = c.req.header('cf-connecting-ip');
+    const identifier = rateLimiter.getIdentifier(cfConnectingIp);
+    
+    try {
+      await rateLimiter.checkLimit(identifier);
+    } catch (error) {
+      if (error instanceof RateLimitError) {
+        analytics.trackError(c.req.path, 'Rate limit exceeded', 429);
+        return c.json(formatError(error), 429);
+      }
+      throw error;
+    }
+
+    return next();
+  } catch (error) {
+    if (isAppError(error)) {
+      analytics.trackError(c.req.path, error.message, error.statusCode);
+      return c.json(formatError(error), error.statusCode);
+    }
+    analytics.trackError(c.req.path, String(error), 500);
+    return c.json(formatError(error), 500);
+  }
+});
 
 /**
  * Health check endpoint
