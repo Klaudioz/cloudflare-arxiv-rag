@@ -279,8 +279,29 @@ def main(storage_path: Path, max_papers=None):
     # Step 1: Load paper IDs
     print("\n[Step 1] Loading CS.AI paper IDs...")
     
-    # Determine max papers to fetch
-    effective_max = max_papers if max_papers else 6000
+    # Determine max papers to fetch (default: ALL available)
+    # Query arXiv to get total count if not specified
+    if max_papers:
+        effective_max = max_papers
+    else:
+        try:
+            base_url = "http://export.arxiv.org/api/query"
+            params = {
+                'search_query': 'cat:cs.AI',
+                'start': 0,
+                'max_results': 1,
+            }
+            response = requests.get(base_url, params=params, timeout=30)
+            root = ET.fromstring(response.content)
+            total_elem = root.find('.//{http://a9.com/-/spec/opensearch/1.1/}totalResults')
+            if total_elem is not None:
+                effective_max = int(total_elem.text)
+                print(f"  Total CS.AI papers available: {effective_max:,}")
+            else:
+                effective_max = 6000
+        except Exception as e:
+            print(f"  Warning: Could not get total count, defaulting to 6000: {e}")
+            effective_max = 6000
     
     # Check if we have cs_ai_ids.txt from previous run
     cs_ai_ids_file = storage_path / "cs_ai_ids.txt"
