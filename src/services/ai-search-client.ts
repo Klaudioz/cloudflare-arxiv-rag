@@ -2,7 +2,7 @@
  * Cloudflare AI Search client service
  */
 
-import { SearchResult, AISearchResponse, RAGResponse } from '../types';
+import { SearchResult, RAGResponse } from '../types';
 import { AISearchError } from '../middleware';
 
 export interface AISearchOptions {

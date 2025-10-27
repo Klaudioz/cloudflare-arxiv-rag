@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
-import { AISearchClient, ArxivClient } from './services';
-import { Validator, formatError, isAppError, ValidationError, RateLimiter, AuthManager, RateLimitError } from './middleware';
+import { AISearchClient } from './services';
+import { Validator, formatError, isAppError, RateLimiter, AuthManager, RateLimitError } from './middleware';
 import { ConfigManager } from './config';
 import { Analytics } from './utils';
 import { papersRouter } from './routes/papers';
@@ -21,7 +21,6 @@ app.route('/api/v1/papers', papersRouter);
 let configManager: ConfigManager;
 let analytics: Analytics;
 let aiSearchClient: AISearchClient;
-let arxivClient: ArxivClient;
 let rateLimiter: RateLimiter;
 let authManager: AuthManager;
 

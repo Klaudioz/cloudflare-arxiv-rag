@@ -118,7 +118,7 @@ export class AuthManager {
         userId: payload.sub || payload.userId,
         role: payload.role || 'user'
       };
-    } catch (error) {
+    } catch {
       throw new AppError('Invalid JWT token', 401, 'INVALID_JWT');
     }
   }
