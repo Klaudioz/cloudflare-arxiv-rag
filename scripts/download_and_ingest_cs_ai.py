@@ -34,29 +34,40 @@ import sys
 import os
 import re
 import time
+import logging
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from urllib.parse import quote
 import xml.etree.ElementTree as ET
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler('arxiv_download.log')
+    ]
+)
+logger = logging.getLogger(__name__)
+
 try:
     import requests
 except ImportError:
-    print("ERROR: requests library not found. Install with: pip install requests")
+    logger.error("requests library not found. Install with: pip install requests")
     sys.exit(1)
 
 try:
     import pdfplumber
 except ImportError:
-    print("WARNING: pdfplumber not found. PDF text extraction will be skipped.")
-    print("Install with: pip install pdfplumber")
+    logger.warning("pdfplumber not found. PDF text extraction will be skipped. Install with: pip install pdfplumber")
     pdfplumber = None
 
 try:
     from tqdm import tqdm
 except ImportError:
-    print("WARNING: tqdm not found. Progress bars disabled. Install with: pip install tqdm")
+    logger.warning("tqdm not found. Progress bars disabled. Install with: pip install tqdm")
     tqdm = None
 
 
@@ -113,8 +124,13 @@ def download_pdf_direct(arxiv_id, dest_path, attempt=1, max_attempts=5):
     url = f"https://arxiv.org/pdf/{arxiv_id}.pdf"
     
     try:
+        # Use User-Agent to avoid blocking
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+        
         # allow_redirects=True follows 301/302 redirects automatically
-        response = requests.get(url, timeout=30, stream=True, allow_redirects=True)
+        response = requests.get(url, timeout=60, stream=True, allow_redirects=True, headers=headers)
         if response.status_code == 200:
             with open(dest_path, 'wb') as f:
                 f.write(response.content)
@@ -126,39 +142,43 @@ def download_pdf_direct(arxiv_id, dest_path, attempt=1, max_attempts=5):
                 # PDF is corrupt/empty, delete it and retry
                 os.remove(dest_path)
                 if attempt < max_attempts:
-                    wait_time = 2 ** (attempt - 1)
+                    wait_time = 3 ** (attempt - 1)  # 1s, 3s, 9s, 27s
                     time.sleep(wait_time)
                     return download_pdf_direct(arxiv_id, dest_path, attempt + 1, max_attempts)
                 else:
-                    print(f"    [INVALID] {arxiv_id}: Not a valid PDF (possibly error page)")
                     return False
-        elif response.status_code in [500, 502, 503, 504]:
-            # Server errors - retry with backoff
+        elif response.status_code in [429, 500, 502, 503, 504]:
+            # Rate limit or server errors - retry with longer backoff
             if attempt < max_attempts:
-                wait_time = 2 ** (attempt - 1)  # 1s, 2s, 4s, 8s
+                wait_time = 5 ** (attempt - 1)  # 1s, 5s, 25s, 125s
                 time.sleep(wait_time)
                 return download_pdf_direct(arxiv_id, dest_path, attempt + 1, max_attempts)
             else:
-                print(f"    [FAIL] {arxiv_id}: HTTP {response.status_code} after {max_attempts} attempts")
+                return False
         elif response.status_code == 404:
             # Not found - don't retry
-            print(f"    [404] {arxiv_id}: Paper not found")
+            return False
         else:
-            print(f"    [WARN] {arxiv_id}: HTTP {response.status_code}")
+            if attempt < max_attempts:
+                wait_time = 3 ** (attempt - 1)
+                time.sleep(wait_time)
+                return download_pdf_direct(arxiv_id, dest_path, attempt + 1, max_attempts)
+            else:
+                return False
     except requests.Timeout:
         if attempt < max_attempts:
-            wait_time = 2 ** (attempt - 1)
+            wait_time = 3 ** (attempt - 1)
             time.sleep(wait_time)
             return download_pdf_direct(arxiv_id, dest_path, attempt + 1, max_attempts)
         else:
-            print(f"    [TIMEOUT] {arxiv_id}: After {max_attempts} attempts")
+            return False
     except Exception as e:
         if attempt < max_attempts and not isinstance(e, (FileNotFoundError, PermissionError)):
-            wait_time = 2 ** (attempt - 1)
+            wait_time = 3 ** (attempt - 1)
             time.sleep(wait_time)
             return download_pdf_direct(arxiv_id, dest_path, attempt + 1, max_attempts)
         else:
-            print(f"    [ERROR] {arxiv_id}: {type(e).__name__}: {str(e)[:80]}")
+            return False
     return False
 
 
@@ -277,8 +297,8 @@ def main(storage_path: Path, max_papers=None, min_date="2019-01-01", categories=
     
     # Parse categories
     cat_list = [c.strip() for c in categories.split(',')]
-    print(f"Fetching categories: {', '.join(cat_list)}")
-    print(f"Filtering papers from {min_date} onwards")
+    logger.info(f"Fetching categories: {', '.join(cat_list)}")
+    logger.info(f"Filtering papers from {min_date} onwards")
     
     pdf_dir = storage_path / "cs-ai-pdfs"
     pdf_dir.mkdir(exist_ok=True)
@@ -286,15 +306,15 @@ def main(storage_path: Path, max_papers=None, min_date="2019-01-01", categories=
     output_jsonl = storage_path / "cs-ai-papers.jsonl"
     log_file = storage_path / "download_log.txt"
     
-    print(f"\n{'='*70}")
-    print("CS.AI Paper Bulk Download & Ingestion")
-    print(f"{'='*70}")
-    print(f"Storage path: {storage_path}")
-    print(f"PDF directory: {pdf_dir}")
-    print(f"Output JSONL: {output_jsonl}")
+    logger.info("="*70)
+    logger.info("CS.AI Paper Bulk Download & Ingestion")
+    logger.info("="*70)
+    logger.info(f"Storage path: {storage_path}")
+    logger.info(f"PDF directory: {pdf_dir}")
+    logger.info(f"Output JSONL: {output_jsonl}")
     
     # Step 1: Load paper IDs
-    print("\n[Step 1] Loading CS.AI paper IDs...")
+    logger.info("[Step 1] Loading CS.AI paper IDs...")
     
     # Determine max papers to fetch (default: ALL available)
     # Query arXiv to get total count if not specified
@@ -313,11 +333,11 @@ def main(storage_path: Path, max_papers=None, min_date="2019-01-01", categories=
             total_elem = root.find('.//{http://a9.com/-/spec/opensearch/1.1/}totalResults')
             if total_elem is not None:
                 effective_max = int(total_elem.text)
-                print(f"  Total CS.AI papers available: {effective_max:,}")
+                logger.info(f"Total CS.AI papers available: {effective_max:,}")
             else:
                 effective_max = 6000
         except Exception as e:
-            print(f"  Warning: Could not get total count, defaulting to 6000: {e}")
+            logger.warning(f"Could not get total count, defaulting to 6000: {e}")
             effective_max = 6000
     
     # Check if we have cs_ai_ids.txt from previous run
@@ -325,7 +345,7 @@ def main(storage_path: Path, max_papers=None, min_date="2019-01-01", categories=
     ids_checkpoint_file = storage_path / "ids_checkpoint.txt"  # Track last successful batch
     
     if not cs_ai_ids_file.exists():
-        print(f"  Fetching papers from arXiv API ({effective_max:,} total)...")
+        logger.info(f"Fetching papers from arXiv API ({effective_max:,} total)...")
         base_url = "http://export.arxiv.org/api/query"
         paper_ids = set()  # Use set for automatic deduplication
         start = 0
@@ -338,7 +358,7 @@ def main(storage_path: Path, max_papers=None, min_date="2019-01-01", categories=
                 with open(ids_checkpoint_file) as f:
                     last_checkpoint = int(f.read().strip())
                     start = last_checkpoint
-                    print(f"  Resuming from batch starting at {start}...")
+                    logger.info(f"Resuming from batch starting at {start}...")
             except:
                 pass
         
@@ -349,13 +369,21 @@ def main(storage_path: Path, max_papers=None, min_date="2019-01-01", categories=
         
         while len(paper_ids) < effective_max:
             batch_num = (start // batch_size) + 1
-            print(f"  Fetching batch {batch_num} (papers {start}-{start + batch_size})...")
+            logger.info(f"Fetching batch {batch_num} (papers {start}-{start + batch_size})...")
             
-            # Build query for all categories
+            # Build query for all categories with date filter
+            # Format: (cat:cs.AI OR cat:cs.LG) AND submittedDate:[202502010000 TO 202512312359]
             cat_query = " OR ".join([f"cat:{cat}" for cat in cat_list])
             
+            # Convert min_date to arXiv timestamp format (YYYYMMDDHHMM)
+            min_date_parts = min_date.split('-')
+            min_timestamp = f"{min_date_parts[0]}{min_date_parts[1]}{min_date_parts[2]}0000"
+            
+            # Full query with date filter
+            full_query = f"({cat_query}) AND submittedDate:[{min_timestamp} TO 202512312359]"
+            
             params = {
-                'search_query': cat_query,
+                'search_query': full_query,
                 'start': start,
                 'max_results': min(batch_size, effective_max - len(paper_ids)),
                 'sortBy': 'submittedDate',
@@ -366,15 +394,15 @@ def main(storage_path: Path, max_papers=None, min_date="2019-01-01", categories=
                 response = requests.get(base_url, params=params, timeout=60)
                 response.raise_for_status()
             except requests.RequestException as e:
-                print(f"  ERROR fetching from API: {e}")
-                print(f"  Checkpoint: {start} papers")
+                logger.error(f"ERROR fetching from API: {e}")
+                logger.info(f"Checkpoint: {start} papers")
                 break
             
             try:
                 root = ET.fromstring(response.content)
             except ET.ParseError as e:
-                print(f"  ERROR parsing XML: {e}")
-                print(f"  Checkpoint: {start} papers")
+                logger.error(f"ERROR parsing XML: {e}")
+                logger.info(f"Checkpoint: {start} papers")
                 break
             
             found_count = 0
@@ -391,28 +419,14 @@ def main(storage_path: Path, max_papers=None, min_date="2019-01-01", categories=
                     if arxiv_id_base in paper_ids:
                         continue
                     
-                    # Filter: only keep new format IDs (YYMM.NNNNN) which have PDFs
-                    # Skip old format (category/NNNNN) - PDFs not available
+                    # Accept all new-format IDs (YYMM.NNNNN)
+                    # arXiv API with date filter will handle date filtering
                     if '.' in arxiv_id_base and '/' not in arxiv_id_base:
-                        # Extract date from ID (YYMM.NNNNN -> YYMM -> YYYY-MM)
-                        try:
-                            id_part = arxiv_id_base.split('.')[0]
-                            yy = int(id_part[:2])
-                            mm = int(id_part[2:4])
-                            
-                            # Convert to full year (07+ = 2000s, 00-06 = 1900s)
-                            full_year = 2000 + yy if yy >= 7 else 1900 + yy
-                            paper_date = f"{full_year}-{mm:02d}-01"  # Use first day of month
-                            
-                            # Only include if date >= min_date
-                            if paper_date >= min_date:
-                                paper_ids.add(arxiv_id_base)  # Use set.add() instead of append()
-                                found_count += 1
-                        except:
-                            pass
+                        paper_ids.add(arxiv_id_base)
+                        found_count += 1
             
             if found_count == 0:
-                print(f"  No more papers found. Total: {len(paper_ids):,}")
+                logger.info(f"No more papers found. Total: {len(paper_ids):,}")
                 break
             
             # Save checkpoint and IDs after each batch
@@ -422,7 +436,7 @@ def main(storage_path: Path, max_papers=None, min_date="2019-01-01", categories=
                 for pid in paper_ids:
                     f.write(pid + "\n")
             
-            print(f"  Fetched {len(paper_ids):,} papers so far")
+            logger.info(f"Fetched {len(paper_ids):,} papers so far")
             start += batch_size
             time.sleep(2)  # Rate limiting
         
@@ -442,7 +456,7 @@ def main(storage_path: Path, max_papers=None, min_date="2019-01-01", categories=
         with open(cs_ai_ids_file, "r") as f:
             all_ids = [line.strip() for line in f if line.strip()]
         paper_ids = all_ids if not max_papers else all_ids[:max_papers]
-        print(f"  Loaded {len(paper_ids):,} papers from cache")
+        logger.info(f"Loaded {len(paper_ids):,} papers from cache")
     
     # Save metadata about the fetch
     metadata_file = storage_path / "fetch_metadata.txt"
@@ -452,10 +466,10 @@ def main(storage_path: Path, max_papers=None, min_date="2019-01-01", categories=
         f.write(f"Total papers: {len(paper_ids):,}\n")
         f.write(f"Latest version only (v suffixes removed): Yes\n")
     
-    print(f"  Total papers to download: {len(paper_ids):,}")
+    logger.info(f"Total papers to download: {len(paper_ids):,}")
     
     # Step 2: Parallel download
-    print(f"\n[Step 2] Downloading {len(paper_ids):,} PDFs (parallel)...")
+    logger.info(f"[Step 2] Downloading {len(paper_ids):,} PDFs (parallel)...")
     results = {"success": 0, "failed": 0, "skipped": 0}
     all_papers = []
     failed_ids = []
@@ -484,12 +498,12 @@ def main(storage_path: Path, max_papers=None, min_date="2019-01-01", categories=
                 with open(log_file, "a") as f:
                     f.write(json.dumps(result) + "\n")
             except Exception as e:
-                print(f"  [ERROR] Future execution error: {e}")
+                logger.error(f"Future execution error: {e}")
                 results["failed"] += 1
     
-    print(f"\n  ✓ Success: {results['success']:,}")
-    print(f"  ✗ Failed: {results['failed']:,}")
-    print(f"  ⊘ Skipped: {results['skipped']:,}")
+    logger.info(f"✓ Success: {results['success']:,}")
+    logger.info(f"✗ Failed: {results['failed']:,}")
+    logger.info(f"⊘ Skipped: {results['skipped']:,}")
     
     # Save failed IDs for reference
     if failed_ids:
@@ -497,21 +511,21 @@ def main(storage_path: Path, max_papers=None, min_date="2019-01-01", categories=
         with open(failed_file, "w") as f:
             for fid in failed_ids:
                 f.write(fid + "\n")
-        print(f"  Failed IDs saved to: {failed_file}")
+        logger.info(f"Failed IDs saved to: {failed_file}")
     
     # Step 3: Write JSONL - regenerate for ALL downloaded PDFs
-    print(f"\n[Step 3] Writing JSONL manifest for all downloaded PDFs...")
+    logger.info("[Step 3] Writing JSONL manifest for all downloaded PDFs...")
     
     # Get all downloaded PDF files and validate
     all_pdfs = list(pdf_dir.glob("*.pdf"))
     pdf_files = [pdf for pdf in all_pdfs if is_valid_pdf(pdf)]
     invalid_pdfs = len(all_pdfs) - len(pdf_files)
     
-    print(f"  Found {len(all_pdfs)} PDF files, {len(pdf_files)} valid, {invalid_pdfs} corrupt/empty")
+    logger.info(f"Found {len(all_pdfs)} PDF files, {len(pdf_files)} valid, {invalid_pdfs} corrupt/empty")
     
     # Remove invalid PDFs
     if invalid_pdfs > 0:
-        print(f"  Removing {invalid_pdfs} invalid PDFs...")
+        logger.info(f"Removing {invalid_pdfs} invalid PDFs...")
         for pdf in all_pdfs:
             if not is_valid_pdf(pdf):
                 try:
@@ -570,17 +584,17 @@ def main(storage_path: Path, max_papers=None, min_date="2019-01-01", categories=
             f.write(json.dumps(ingestion_doc) + "\n")
             ingested_count += 1
     
-    print(f"  ✓ Wrote {ingested_count} papers to {output_jsonl}")
+    logger.info(f"✓ Wrote {ingested_count} papers to {output_jsonl}")
     
     # Step 4: Summary
-    print(f"\n[Step 4] Summary")
-    print(f"{'='*70}")
+    logger.info("[Step 4] Summary")
+    logger.info("="*70)
     total_size = sum(f.stat().st_size for f in pdf_dir.glob("*.pdf"))
-    print(f"  Papers downloaded: {results['success']}")
-    print(f"  Total PDF size: {human_bytes(total_size)}")
-    print(f"  JSONL file: {output_jsonl}")
-    print(f"  Next step: Deploy and trigger bulk ingestion via Workers")
-    print(f"{'='*70}\n")
+    logger.info(f"Papers downloaded: {results['success']}")
+    logger.info(f"Total PDF size: {human_bytes(total_size)}")
+    logger.info(f"JSONL file: {output_jsonl}")
+    logger.info("Next step: Deploy and trigger bulk ingestion via Workers")
+    logger.info("="*70)
 
 
 # ========================
@@ -601,8 +615,8 @@ if __name__ == "__main__":
     try:
         main(Path(args.storage_path), max_papers=args.max_papers, min_date=args.min_date, categories=args.categories)
     except KeyboardInterrupt:
-        print("\n\nInterrupted by user. Download can be resumed.")
+        logger.info("Interrupted by user. Download can be resumed.")
         sys.exit(0)
     except Exception as e:
-        print(f"\nERROR: {e}", file=sys.stderr)
+        logger.exception(f"ERROR: {e}")
         sys.exit(1)
