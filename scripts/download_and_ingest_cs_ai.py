@@ -81,16 +81,28 @@ def human_bytes(n):
     return f"{n:.2f} PB"
 
 
-def is_valid_pdf(file_path, min_size=5000):
+def is_valid_pdf(file_path, min_size=1024):
     """Check if PDF is valid (not empty/corrupted)."""
     try:
         size = os.path.getsize(file_path)
+        # Reject suspiciously small files (error pages are ~1853 bytes)
         if size < min_size:
             return False
-        # Check PDF magic bytes
-        with open(file_path, 'rb') as f:
-            header = f.read(4)
-            return header == b'%PDF'
+        # Try to check PDF magic bytes, but don't fail if we can't read
+        try:
+            with open(file_path, 'rb') as f:
+                header = f.read(4)
+                # Accept if it starts with %PDF or if it's reasonably sized
+                if header == b'%PDF':
+                    return True
+                # If we have >50KB, probably a real PDF even if headers are weird
+                if size > 50000:
+                    return True
+        except:
+            # If file exists and has reasonable size, accept it
+            if size > min_size:
+                return True
+        return False
     except:
         return False
 
@@ -258,10 +270,11 @@ def download_paper(arxiv_id, pdf_dir, max_retries=3):
 # Main Workflow
 # ========================
 
-def main(storage_path: Path, max_papers=None):
+def main(storage_path: Path, max_papers=None, min_year=2007):
     """Main download and ingestion workflow."""
     storage_path = storage_path.resolve()
     storage_path.mkdir(parents=True, exist_ok=True)
+    print(f"Filtering papers from {min_year} onwards")
     
     pdf_dir = storage_path / "cs-ai-pdfs"
     pdf_dir.mkdir(exist_ok=True)
@@ -370,8 +383,17 @@ def main(storage_path: Path, max_papers=None):
                     # Filter: only keep new format IDs (YYMM.NNNNN) which have PDFs
                     # Skip old format (category/NNNNN) - PDFs not available
                     if '.' in arxiv_id_base and '/' not in arxiv_id_base:
-                        paper_ids.append(arxiv_id_base)
-                        found_count += 1
+                        # Extract year from ID (YYMM.NNNNN -> YY -> 20YY for 07+, 19YY for 00-06)
+                        try:
+                            year_part = int(arxiv_id_base.split('.')[0][:2])
+                            full_year = 2000 + year_part if year_part >= 7 else 1900 + year_part
+                            
+                            # Only include if year >= min_year
+                            if full_year >= min_year:
+                                paper_ids.append(arxiv_id_base)
+                                found_count += 1
+                        except:
+                            pass
             
             if found_count == 0:
                 print(f"  No more papers found. Total: {len(paper_ids):,}")
@@ -541,11 +563,12 @@ if __name__ == "__main__":
     )
     parser.add_argument("--storage-path", required=True, help="Storage directory path")
     parser.add_argument("--max-papers", type=int, default=None, help="Max papers to download (for testing)")
+    parser.add_argument("--min-year", type=int, default=2007, help="Only download papers from this year onward (default: 2007, when arXiv added new format)")
     
     args = parser.parse_args()
     
     try:
-        main(Path(args.storage_path), max_papers=args.max_papers)
+        main(Path(args.storage_path), max_papers=args.max_papers, min_year=args.min_year)
     except KeyboardInterrupt:
         print("\n\nInterrupted by user. Download can be resumed.")
         sys.exit(0)
