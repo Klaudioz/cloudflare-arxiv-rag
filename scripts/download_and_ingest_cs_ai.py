@@ -163,7 +163,9 @@ def fetch_paper_metadata_from_arxiv(arxiv_id):
 
 def download_paper(arxiv_id, pdf_dir, max_retries=3):
     """Download a single paper and extract metadata."""
-    pdf_path = pdf_dir / f"{arxiv_id}.pdf"
+    # Normalize filename (replace / with -)
+    safe_filename = arxiv_id.replace('/', '-')
+    pdf_path = pdf_dir / f"{safe_filename}.pdf"
     
     # Skip if already exists
     if pdf_path.exists():
