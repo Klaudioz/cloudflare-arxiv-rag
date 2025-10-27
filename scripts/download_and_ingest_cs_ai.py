@@ -83,16 +83,12 @@ def human_bytes(n):
 
 def download_pdf_direct(arxiv_id, dest_path):
     """Download PDF directly from arXiv using HTTP."""
-    # Normalize arxiv_id to use in URL
-    if '/' in arxiv_id:
-        # Old format: cs/9408101 -> cs/9408101
-        url = f"https://arxiv.org/pdf/{arxiv_id}.pdf"
-    else:
-        # New format: 2510.20994 -> 2510.20994
-        url = f"https://arxiv.org/pdf/{arxiv_id}.pdf"
+    # Construct URL (works for both old and new formats)
+    url = f"https://arxiv.org/pdf/{arxiv_id}.pdf"
     
     try:
-        response = requests.get(url, timeout=30, stream=True)
+        # allow_redirects=True follows 301/302 redirects automatically
+        response = requests.get(url, timeout=30, stream=True, allow_redirects=True)
         if response.status_code == 200:
             with open(dest_path, 'wb') as f:
                 f.write(response.content)
