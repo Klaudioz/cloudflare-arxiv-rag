@@ -42,3 +42,9 @@ coverage/
 tmp/
 temp/
 *.tmp
+
+# Generated data files (uploaded to R2)
+papers-2025.json
+papers-2025-clean.json
+papers-formatted/
+papers/
