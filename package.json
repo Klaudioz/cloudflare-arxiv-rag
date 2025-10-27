@@ -1,0 +1,41 @@
+{
+  "name": "cloudflare-arxiv-rag",
+  "version": "0.1.0",
+  "description": "100% serverless RAG system for arXiv papers on Cloudflare",
+  "main": "src/worker.ts",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "build": "tsc",
+    "lint": "eslint src --ext .ts",
+    "format": "prettier --write src",
+    "test": "jest",
+    "logs": "wrangler tail",
+    "ai-search:create": "wrangler ai-search create arxiv-papers",
+    "ai-search:stats": "wrangler ai-search stats arxiv-papers",
+    "ai-search:sync": "wrangler ai-search sync arxiv-papers"
+  },
+  "keywords": [
+    "rag",
+    "cloudflare",
+    "workers",
+    "ai-search",
+    "arxiv",
+    "semantic-search",
+    "llm"
+  ],
+  "author": "Klaudioz",
+  "license": "MIT",
+  "dependencies": {
+    "@cloudflare/ai": "^1.0.0",
+    "hono": "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "eslint": "^8.50.0",
+    "prettier": "^3.0.0",
+    "typescript": "^5.2.0",
+    "wrangler": "^3.20.0"
+  }
+}

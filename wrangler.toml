@@ -1,0 +1,55 @@
+name = "cloudflare-arxiv-rag"
+type = "service"
+account_id = ""
+workers_dev = true
+route = ""
+zone_id = ""
+
+[env.production]
+name = "cloudflare-arxiv-rag-prod"
+routes = [
+  { pattern = "rag.yourdomain.com", zone_id = "" }
+]
+
+[[ai_search]]
+binding = "AI_SEARCH"
+
+[[analytics_engine_bindings]]
+binding = "ANALYTICS"
+
+[[env.production.analytics_engine_bindings]]
+binding = "ANALYTICS"
+
+[env.production.ai_search]
+binding = "AI_SEARCH"
+
+[[workflows]]
+binding = "WORKFLOWS"
+name = "arxiv-ingestion"
+
+[env.production.workflows]
+binding = "WORKFLOWS"
+name = "arxiv-ingestion"
+
+[build]
+command = "npm run build"
+cwd = "./"
+main = "src/worker.ts"
+
+[build.upload]
+format = "service-worker"
+
+[triggers]
+crons = ["0 6 * * 1-5"]
+
+[[r2_buckets]]
+binding = "R2_BUCKET"
+bucket_name = "arxiv-papers"
+preview_bucket_name = "arxiv-papers-preview"
+
+[env.production.r2_buckets]
+binding = "R2_BUCKET"
+bucket_name = "arxiv-papers-prod"
+
+[docs]
+sidebar_label = "Cloudflare arXiv RAG"
