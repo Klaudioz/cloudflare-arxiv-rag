@@ -26,7 +26,7 @@ describe('ConfigManager', () => {
 
       expect(config.get('env')).toBe('production');
       expect(config.get('aiSearch.instanceName')).toBe('arxiv-papers');
-      expect(config.get('arxiv.categories')).toEqual(['cs.AI']);  // Single default category
+      expect(config.get('arxiv.categories')).toEqual(['cs.AI', 'cs.CV', 'cs.NE', 'cs.CL', 'cs.LG']);
     });
 
     it('should parse nested configuration', () => {
