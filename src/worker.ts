@@ -12,6 +12,9 @@ interface Env {
   ADMIN_API_KEY?: string;
 }
 
+// Helper to convert number to Hono status code type
+const getStatus = (code: number) => code as any;
+
 const app = new Hono<{ Bindings: Env }>();
 
 // Register routers
@@ -35,7 +38,6 @@ function initializeServices(env: Env) {
       sampleRate: configManager.get('analytics.sampleRate')
     });
     aiSearchClient = new AISearchClient(env, configManager.get('aiSearch.instanceName'));
-    arxivClient = new ArxivClient();
     rateLimiter = new RateLimiter(env, {
       enabled: configManager.get('rateLimit.enabled'),
       requestsPerMinute: configManager.get('rateLimit.requestsPerMinute'),
@@ -65,7 +67,7 @@ app.use('*', async (c, next) => {
       const authConfig = configManager.get('auth.enabled');
       if (authConfig) {
         const authContext = await authManager.authenticate(c.req.raw);
-        c.set('auth', authContext);
+        (c as any).set('auth', authContext);
       }
     }
 
@@ -78,7 +80,7 @@ app.use('*', async (c, next) => {
     } catch (error) {
       if (error instanceof RateLimitError) {
         analytics.trackError(c.req.path, 'Rate limit exceeded', 429);
-        return c.json(formatError(error), 429);
+        return c.json(formatError(error), getStatus(429));
       }
       throw error;
     }
@@ -87,10 +89,10 @@ app.use('*', async (c, next) => {
   } catch (error) {
     if (isAppError(error)) {
       analytics.trackError(c.req.path, error.message, error.statusCode);
-      return c.json(formatError(error), error.statusCode);
+      return c.json(formatError(error), getStatus(error.statusCode));
     }
     analytics.trackError(c.req.path, String(error), 500);
-    return c.json(formatError(error), 500);
+    return c.json(formatError(error), getStatus(500));
   }
 });
 
@@ -147,10 +149,10 @@ app.post('/api/v1/search', async (c) => {
   } catch (error) {
     if (isAppError(error)) {
       analytics.trackError('/api/v1/search', error.message, error.statusCode);
-      return c.json(formatError(error), error.statusCode);
+      return c.json(formatError(error), getStatus(error.statusCode));
     }
     analytics.trackError('/api/v1/search', String(error), 500);
-    return c.json(formatError(error), 500);
+    return c.json(formatError(error), getStatus(500));
   }
 });
 
@@ -182,10 +184,10 @@ app.post('/api/v1/ask', async (c) => {
   } catch (error) {
     if (isAppError(error)) {
       analytics.trackError('/api/v1/ask', error.message, error.statusCode);
-      return c.json(formatError(error), error.statusCode);
+      return c.json(formatError(error), getStatus(error.statusCode));
     }
     analytics.trackError('/api/v1/ask', String(error), 500);
-    return c.json(formatError(error), 500);
+    return c.json(formatError(error), getStatus(500));
   }
 });
 
@@ -223,10 +225,10 @@ app.post('/api/v1/stream', async (c) => {
   } catch (error) {
     if (isAppError(error)) {
       analytics.trackError('/api/v1/stream', error.message, error.statusCode);
-      return c.json(formatError(error), error.statusCode);
+      return c.json(formatError(error), getStatus(error.statusCode));
     }
     analytics.trackError('/api/v1/stream', String(error), 500);
-    return c.json(formatError(error), 500);
+    return c.json(formatError(error), getStatus(500));
   }
 });
 
@@ -255,7 +257,7 @@ app.get('/api/v1/metrics', async (c) => {
     });
   } catch (error) {
     console.error('Metrics error:', error);
-    return c.json({ error: 'Failed to retrieve metrics' }, 500);
+    return c.json({ error: 'Failed to retrieve metrics' }, getStatus(500));
   }
 });
 
@@ -265,9 +267,9 @@ app.get('/api/v1/metrics', async (c) => {
 app.onError((err, c) => {
   console.error('Handler error:', err);
   if (isAppError(err)) {
-    return c.json(formatError(err), err.statusCode);
+    return c.json(formatError(err), getStatus(err.statusCode));
   }
-  return c.json(formatError(err), 500);
+  return c.json(formatError(err), getStatus(500));
 });
 
 export default app;

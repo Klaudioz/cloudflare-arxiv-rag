@@ -12,6 +12,9 @@ interface Env {
   ANALYTICS: AnalyticsEngineDataPoint;
 }
 
+// Helper to convert number to Hono status code type
+const getStatus = (code: number) => code as any;
+
 export const papersRouter = new Hono<{ Bindings: Env }>();
 
 /**
@@ -28,9 +31,9 @@ papersRouter.get('/', async (c) => {
     });
   } catch (error) {
     if (isAppError(error)) {
-      return c.json(formatError(error), error.statusCode);
+      return c.json(formatError(error), getStatus(error.statusCode));
     }
-    return c.json(formatError(error), 500);
+    return c.json(formatError(error), getStatus(500));
   }
 });
 
@@ -53,9 +56,9 @@ papersRouter.get('/:id', async (c) => {
     }, 404);
   } catch (error) {
     if (isAppError(error)) {
-      return c.json(formatError(error), error.statusCode);
+      return c.json(formatError(error), getStatus(error.statusCode));
     }
-    return c.json(formatError(error), 500);
+    return c.json(formatError(error), getStatus(500));
   }
 });
 
@@ -84,9 +87,9 @@ papersRouter.post('/ingest', async (c) => {
     });
   } catch (error) {
     if (isAppError(error)) {
-      return c.json(formatError(error), error.statusCode);
+      return c.json(formatError(error), getStatus(error.statusCode));
     }
-    return c.json(formatError(error), 500);
+    return c.json(formatError(error), getStatus(500));
   }
 });
 
@@ -119,9 +122,9 @@ papersRouter.get('/daily/:date', async (c) => {
     });
   } catch (error) {
     if (isAppError(error)) {
-      return c.json(formatError(error), error.statusCode);
+      return c.json(formatError(error), getStatus(error.statusCode));
     }
-    return c.json(formatError(error), 500);
+    return c.json(formatError(error), getStatus(500));
   }
 });
 
@@ -156,9 +159,9 @@ papersRouter.get('/archive/month/:year/:month', async (c) => {
     });
   } catch (error) {
     if (isAppError(error)) {
-      return c.json(formatError(error), error.statusCode);
+      return c.json(formatError(error), getStatus(error.statusCode));
     }
-    return c.json(formatError(error), 500);
+    return c.json(formatError(error), getStatus(500));
   }
 });
 
@@ -187,9 +190,9 @@ papersRouter.get('/archive/year/:year', async (c) => {
     });
   } catch (error) {
     if (isAppError(error)) {
-      return c.json(formatError(error), error.statusCode);
+      return c.json(formatError(error), getStatus(error.statusCode));
     }
-    return c.json(formatError(error), 500);
+    return c.json(formatError(error), getStatus(500));
   }
 });
 
@@ -231,8 +234,8 @@ papersRouter.get('/archive/range', async (c) => {
     });
   } catch (error) {
     if (isAppError(error)) {
-      return c.json(formatError(error), error.statusCode);
+      return c.json(formatError(error), getStatus(error.statusCode));
     }
-    return c.json(formatError(error), 500);
+    return c.json(formatError(error), getStatus(500));
   }
 });

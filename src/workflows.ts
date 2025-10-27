@@ -22,7 +22,7 @@ interface WorkflowPayload {
  * Fetches papers from arXiv and indexes them in AI Search
  */
 export class ArxivIngestionWorkflow extends WorkflowEntrypoint<WorkflowPayload> {
-  async run(event: WorkflowEvent<WorkflowPayload>, step: WorkflowStep) {
+  async run(event: any, step: WorkflowStep) {
     // Calculate target date (previous day)
     const targetDate = event.payload.date
       ? new Date(event.payload.date)
