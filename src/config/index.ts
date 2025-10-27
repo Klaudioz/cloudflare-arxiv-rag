@@ -86,7 +86,7 @@ export class ConfigManager {
    */
   private parseCategories(categoriesStr?: string): string[] {
     if (!categoriesStr) {
-      return ['cs.AI'];  // Default to cs.AI
+      return ['cs.AI', 'cs.CV', 'cs.NE', 'cs.CL', 'cs.LG'];  // Default to 5 AI/ML categories
     }
     return categoriesStr.split(',').map((cat) => cat.trim()).filter(Boolean);
   }

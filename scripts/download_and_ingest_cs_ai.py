@@ -594,7 +594,7 @@ if __name__ == "__main__":
     parser.add_argument("--storage-path", required=True, help="Storage directory path")
     parser.add_argument("--max-papers", type=int, default=None, help="Max papers to download (for testing)")
     parser.add_argument("--min-date", type=str, default="2019-01-01", help="Only download papers from this date onward (format: YYYY-MM-DD, default: 2019-01-01)")
-    parser.add_argument("--categories", type=str, default="cs.AI,cs.LG,cs.CL", help="Comma-separated arXiv categories to fetch (default: cs.AI,cs.LG,cs.CL)")
+    parser.add_argument("--categories", type=str, default="cs.AI,cs.CV,cs.NE,cs.CL,cs.LG", help="Comma-separated arXiv categories to fetch (default: cs.AI,cs.CV,cs.NE,cs.CL,cs.LG)")
     
     args = parser.parse_args()
     
