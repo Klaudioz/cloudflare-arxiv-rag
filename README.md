@@ -26,14 +26,18 @@ cd cloudflare-arxiv-rag
 npm install
 wrangler login
 
+# Create R2 buckets (required!)
+wrangler r2 bucket create arxiv-papers-staging
+wrangler r2 bucket create arxiv-papers-prod
+
 # Create AI Search instance
 wrangler ai-search create arxiv-papers
 
-# Deploy
-wrangler deploy
+# Deploy to staging
+wrangler deploy --env staging
 
 # Access
-curl https://your-project.workers.dev/api/v1/health
+curl https://cloudflare-arxiv-rag-staging.workers.dev/api/v1/health
 ```
 
 ## API Endpoints
@@ -114,10 +118,26 @@ wrangler secret list --env production
 
 ### Getting Required Values
 
-**Cloudflare API Token:**
+**Cloudflare API Token:** ⚠️ IMPORTANT
+> Use **API Token**, NOT Global API Key. Wrangler requires scoped API Tokens.
+
 1. Go to: https://dash.cloudflare.com/profile/api-tokens
-2. Click "Create Token" → Select "Edit Cloudflare Workers" template
-3. Copy token → Add to GitHub Secrets as `CLOUDFLARE_API_TOKEN`
+2. Click **"Create Token"** (not "View Global API Key")
+3. Select **"Edit Cloudflare Workers"** template
+4. Ensure permissions include:
+   - Account → Cloudflare Workers Scripts → Edit
+   - Account → Cloudflare Workers KV → Edit
+   - Account → Cloudflare Workers R2 → Edit
+   - Account → Cloudflare Workers AI → Read
+5. Click "Continue to summary" → "Create Token"
+6. **Copy immediately** (shown only once!)
+7. Add to GitHub Secrets as `CLOUDFLARE_API_TOKEN`
+
+**Troubleshooting deployment errors:**
+- `Unable to authenticate [code: 10001]` → Verify API Token (not Global API Key)
+- `R2 bucket not found [code: 10085]` → Create buckets: `wrangler r2 bucket create arxiv-papers-staging`
+- Token expired → Regenerate at https://dash.cloudflare.com/profile/api-tokens
+- Test locally: `wrangler whoami` and `wrangler deploy --env staging`
 
 **Cloudflare Account ID:**
 1. Go to: https://dash.cloudflare.com/
