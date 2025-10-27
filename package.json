@@ -34,6 +34,7 @@
     "hono": "^4.1.0"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^4.20251014.0",
     "@types/node": "^20.0.0",
     "@vitest/coverage-v8": "^1.0.0",
     "@vitest/ui": "^1.0.0",
