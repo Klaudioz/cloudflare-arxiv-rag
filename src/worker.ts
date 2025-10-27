@@ -51,6 +51,18 @@ function initializeServices(env: Env) {
 }
 
 /**
+ * Security headers middleware
+ */
+app.use('*', (c, next) => {
+  c.header('X-Content-Type-Options', 'nosniff');
+  c.header('X-Frame-Options', 'DENY');
+  c.header('X-XSS-Protection', '1; mode=block');
+  c.header('Referrer-Policy', 'strict-origin-when-cross-origin');
+  c.header('Permissions-Policy', 'geolocation=(), microphone=(), camera=()');
+  return next();
+});
+
+/**
  * Rate limiting & authentication middleware
  */
 app.use('*', async (c, next) => {
@@ -102,7 +114,7 @@ app.use('*', async (c, next) => {
 app.get('/health', (c) => {
   initializeServices(c.env);
 
-  return c.json({
+  const response = c.json({
     status: 'ok',
     timestamp: Date.now(),
     service: 'cloudflare-arxiv-rag',
@@ -112,6 +124,10 @@ app.get('/health', (c) => {
       aiSearch: configManager.get('aiSearch.instanceName')
     }
   });
+
+  // Cache health check for 1 minute
+  c.header('Cache-Control', 'public, max-age=60');
+  return response;
 });
 
 /**
@@ -241,7 +257,7 @@ app.get('/api/v1/metrics', async (c) => {
 
     const stats = await aiSearchClient.getStats();
 
-    return c.json({
+    const response = c.json({
       service: 'cloudflare-arxiv-rag',
       timestamp: Date.now(),
       features: {
@@ -255,6 +271,10 @@ app.get('/api/v1/metrics', async (c) => {
         lastSync: stats.lastSyncTime
       }
     });
+
+    // Cache metrics for 5 minutes
+    c.header('Cache-Control', 'public, max-age=300');
+    return response;
   } catch (error) {
     console.error('Metrics error:', error);
     return c.json({ error: 'Failed to retrieve metrics' }, getStatus(500));
