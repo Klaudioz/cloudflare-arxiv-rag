@@ -4,7 +4,7 @@
 
 **Status**: 🚀 Production-ready | **Performance**: +70% faster | **Cost**: -98% cheaper
 
-> This project is a Cloudflare-native implementation of [jamwithai/arxiv-paper-curator](https://github.com/jamwithai/arxiv-paper-curator), migrating the complete RAG system from Docker to Cloudflare's edge platform using AI Search, Workers, and Vectorize.
+> A complete reimplementation of [jamwithai/arxiv-paper-curator](https://github.com/jamwithai/arxiv-paper-curator) using Cloudflare's edge platform. This version migrates the entire RAG system from Docker to serverless Cloudflare infrastructure using AI Search, Workers, and Vectorize.
 
 ## Features
 
@@ -36,15 +36,12 @@ wrangler deploy
 curl https://your-project.workers.dev/api/v1/health
 ```
 
-## Architecture
+## API Endpoints
 
-```
-arXiv API → Cloudflare Containers (PDF parsing)
-         → Cloudflare AI Search (indexing)
-         → Workers (API layer)
-         → Pages (UI)
-         → Analytics Engine (monitoring)
-```
+- `GET /health` - Health check
+- `POST /api/v1/search` - Search papers (retrieval only)
+- `POST /api/v1/ask` - RAG with generation
+- `POST /api/v1/stream` - Streaming RAG responses
 
 ## Tech Stack
 
@@ -58,31 +55,11 @@ arXiv API → Cloudflare Containers (PDF parsing)
 
 ## Performance
 
-| Metric | Before | After | Improvement |
-|--------|--------|-------|-------------|
+| Metric | Docker Original | Cloudflare | Improvement |
+|--------|---|---|---|
 | Response latency | 8-20s | 4-8s | +50% ✅ |
 | Cache hit rate | 60% | 78% | +30% ✅ |
 | Monthly cost | $330-670 | $1-5 | -98% ✅ |
-| Dev time | 3-4 weeks | 1-2 weeks | -50% ✅ |
-
-## Documentation
-
-- [AGENTS.md](./AGENTS.md) - Complete architecture & implementation guide
-- [Cloudflare AI Search Docs](https://developers.cloudflare.com/ai-search/)
-- [Workers Docs](https://developers.cloudflare.com/workers/)
-
-## Project Structure
-
-```
-cloudflare-arxiv-rag/
-├── src/
-│   ├── worker.ts              # Main API layer
-│   ├── workflows.ts           # Daily ingestion pipeline
-│   └── utils/                 # Helpers
-├── wrangler.toml              # Cloudflare config
-├── package.json
-└── AGENTS.md                  # Full documentation
-```
 
 ## Development
 
@@ -100,36 +77,11 @@ wrangler tail
 wrangler ai-search stats arxiv-papers
 ```
 
-## API Endpoints
+## Documentation
 
-- `GET /health` - Health check
-- `POST /api/v1/search` - Search papers (retrieval only)
-- `POST /api/v1/ask` - RAG with generation
-- `POST /api/v1/stream` - Streaming RAG responses
-
-## Environment Variables
-
-Create a `.env` file:
-
-```env
-ARXIV_CATEGORY=cs.AI
-ARXIV_MAX_RESULTS=15
-ARXIV_SCHEDULE="0 6 * * 1-5"
-```
-
-## Cost Breakdown
-
-```
-Workers AI (10K calls/day)    $0 (free tier)
-AI Search                     $0 (included)
-R2 Storage (1-5GB)            $1-5
-Vectorize                     $0 (included)
-Pages                         $0 (free)
-────────────────────────────
-MONTHLY: $1-5
-```
-
-vs Docker ($330-670/month)
+- [AGENTS.md](./AGENTS.md) - Complete architecture & implementation guide
+- [Cloudflare AI Search Docs](https://developers.cloudflare.com/ai-search/)
+- [Workers Docs](https://developers.cloudflare.com/workers/)
 
 ## Contributing
 
