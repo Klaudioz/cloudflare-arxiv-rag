@@ -5,6 +5,21 @@ workers_dev = true
 route = ""
 zone_id = ""
 
+[env.staging]
+name = "cloudflare-arxiv-rag-staging"
+workers_dev = true
+
+[[env.staging.ai_search]]
+binding = "AI_SEARCH"
+
+[[env.staging.analytics_engine_bindings]]
+binding = "ANALYTICS"
+
+[[env.staging.r2_buckets]]
+binding = "R2_BUCKET"
+bucket_name = "arxiv-papers-staging"
+preview_bucket_name = "arxiv-papers-staging-preview"
+
 [env.production]
 name = "cloudflare-arxiv-rag-prod"
 routes = [
