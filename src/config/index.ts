@@ -10,7 +10,7 @@ export interface Config {
     syncIntervalHours: number;
   };
   arxiv: {
-    category: string;
+    categories: string[];  // Support multiple categories
     maxResults: number;
     schedule: string;
   };
@@ -51,7 +51,7 @@ export class ConfigManager {
         syncIntervalHours: parseInt(env?.AI_SEARCH_SYNC_INTERVAL_HOURS || '6')
       },
       arxiv: {
-        category: env?.ARXIV_CATEGORY || 'cs.AI',
+        categories: this.parseCategories(env?.ARXIV_CATEGORY),
         maxResults: parseInt(env?.ARXIV_MAX_RESULTS || '100'),
         schedule: env?.ARXIV_SEARCH_SCHEDULE || '0 6 * * 1-5'
       },
@@ -79,6 +79,16 @@ export class ConfigManager {
         jwtSecret: env?.JWT_SECRET
       }
     };
+  }
+
+  /**
+   * Parse comma-separated arXiv categories
+   */
+  private parseCategories(categoriesStr?: string): string[] {
+    if (!categoriesStr) {
+      return ['cs.AI'];  // Default to cs.AI
+    }
+    return categoriesStr.split(',').map((cat) => cat.trim()).filter(Boolean);
   }
 
   /**

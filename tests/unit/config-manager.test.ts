@@ -18,7 +18,7 @@ describe('ConfigManager', () => {
 
       expect(config.get('env')).toBe('production');
       expect(config.get('aiSearch.instanceName')).toBe('test-instance');
-      expect(config.get('arxiv.category')).toBe('cs.LG');
+      expect(config.get('arxiv.categories')).toEqual(['cs.LG']);
     });
 
     it('should use default values when env vars are missing', () => {
@@ -26,7 +26,7 @@ describe('ConfigManager', () => {
 
       expect(config.get('env')).toBe('production');
       expect(config.get('aiSearch.instanceName')).toBe('arxiv-papers');
-      expect(config.get('arxiv.category')).toBe('cs.AI');
+      expect(config.get('arxiv.categories')).toEqual(['cs.AI']);
     });
 
     it('should parse nested configuration', () => {
