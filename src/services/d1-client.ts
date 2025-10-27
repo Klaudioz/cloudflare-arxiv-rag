@@ -215,6 +215,54 @@ export class D1Client {
   }
 
   /**
+   * Get all chunks with embeddings for semantic search
+   */
+  async getAllChunksWithEmbeddings(): Promise<Array<{
+    chunkId: string;
+    paperId: string;
+    content: string;
+    embedding: string | null;
+    paper: Paper;
+  }>> {
+    const results = await this.db.prepare(`
+      SELECT 
+        pc.id as chunkId,
+        pc.paper_id as paperId,
+        pc.content,
+        ce.embedding,
+        p.id,
+        p.arxiv_id,
+        p.title,
+        p.abstract,
+        p.authors,
+        p.published_date,
+        p.category,
+        p.pdf_url
+      FROM paper_chunks pc
+      LEFT JOIN chunk_embeddings ce ON pc.id = ce.chunk_id
+      LEFT JOIN papers p ON pc.paper_id = p.id
+      WHERE ce.embedding IS NOT NULL
+    `).all();
+
+    return (results.results || []).map((row: any) => ({
+      chunkId: row.chunkId,
+      paperId: row.paperId,
+      content: row.content,
+      embedding: row.embedding,
+      paper: {
+        id: row.id,
+        arxiv_id: row.arxiv_id,
+        title: row.title,
+        abstract: row.abstract,
+        authors: JSON.parse(row.authors || '[]'),
+        published_date: row.published_date,
+        category: row.category,
+        pdf_url: row.pdf_url
+      }
+    }));
+  }
+
+  /**
    * Log ingestion
    */
   async logIngestion(log: {
