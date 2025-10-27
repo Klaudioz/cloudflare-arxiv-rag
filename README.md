@@ -163,6 +163,183 @@ The script is fully resumable:
 
 Simply rerun the command to continue from where it stopped.
 
+### After Download Completes: Next Steps
+
+Once the download finishes, you'll have `storage/cs-ai-papers.jsonl` ready. Follow these steps:
+
+#### Step 1: Prepare the Ingestion Endpoint (Phase 8)
+
+The ingestion endpoint needs to be created in your Workers API. Add this route to `src/routes/ingest.ts`:
+
+```typescript
+import { Hono } from 'hono';
+import { IngestionService } from '../services/ingestion-service';
+import { D1Client } from '../services/d1-client';
+import { EmbeddingsService } from '../services/embeddings-service';
+
+export const ingestRouter = new Hono();
+
+ingestRouter.post('/bulk', async (c) => {
+  try {
+    const { jsonl_file } = await c.req.json();
+    
+    // Read the JSONL file
+    const response = await fetch(jsonl_file);
+    const jsonlContent = await response.text();
+    
+    // Create services
+    const d1Client = new D1Client(c.env.DB);
+    const embeddingsService = new EmbeddingsService(c.env.AI);
+    const ingestionService = new IngestionService(d1Client, embeddingsService);
+    
+    // Bulk ingest
+    const result = await ingestionService.bulkIngestFromJsonl(jsonlContent, 500);
+    
+    return c.json({
+      status: 'success',
+      result: {
+        totalPapers: result.totalPapers,
+        successfulPapers: result.successfulPapers,
+        duplicatesSkipped: result.duplicatesSkipped,
+        totalChunks: result.totalChunks,
+        totalEmbeddings: result.totalEmbeddings,
+        batchCount: result.batchCount,
+        duration: `${(result.duration / 1000).toFixed(2)}s`,
+        errors: result.errors.length > 0 ? result.errors.slice(0, 10) : []
+      }
+    });
+  } catch (error) {
+    return c.json({
+      status: 'error',
+      error: error instanceof Error ? error.message : 'Unknown error'
+    }, { status: 400 });
+  }
+});
+```
+
+Then import in `src/worker.ts`:
+```typescript
+import { ingestRouter } from './routes/ingest';
+// In your main app:
+app.route('/api/v1/ingest', ingestRouter);
+```
+
+#### Step 2: Deploy Updated Workers
+
+```bash
+# Deploy to staging first
+wrangler deploy --env staging
+
+# Verify deployment
+curl https://cloudflare-arxiv-rag-staging.klaudioz.workers.dev/health
+```
+
+#### Step 3: Trigger Bulk Ingestion
+
+```bash
+# Start ingestion (will process in batches of 500)
+curl -X POST https://cloudflare-arxiv-rag-staging.klaudioz.workers.dev/api/v1/ingest/bulk \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-admin-api-key" \
+  -d '{"jsonl_file": "./storage/cs-ai-papers.jsonl"}'
+```
+
+**Expected response:**
+```json
+{
+  "status": "success",
+  "result": {
+    "totalPapers": 6000,
+    "successfulPapers": 5980,
+    "duplicatesSkipped": 20,
+    "totalChunks": 12450,
+    "totalEmbeddings": 12450,
+    "batchCount": 12,
+    "duration": "450.25s",
+    "errors": []
+  }
+}
+```
+
+#### Step 4: Monitor Progress
+
+- **Check D1 database**: `wrangler d1 execute arxiv-papers --remote --command "SELECT COUNT(*) as paper_count FROM papers;"`
+- **View Analytics Engine**: Cloudflare Dashboard → Analytics Engine
+- **Check logs**: `wrangler tail --env staging`
+
+#### Step 5: Verify Search Works
+
+```bash
+# Test hybrid search
+curl -X POST https://cloudflare-arxiv-rag-staging.klaudioz.workers.dev/api/v1/search \
+  -H "Content-Type: application/json" \
+  -d '{"query": "transformers attention mechanism", "top_k": 10}'
+
+# Test RAG generation
+curl -X POST https://cloudflare-arxiv-rag-staging.klaudioz.workers.dev/api/v1/ask \
+  -H "Content-Type: application/json" \
+  -d '{"query": "What are recent advances in transformers?", "top_k": 3}'
+```
+
+#### Step 6: Deploy to Production
+
+```bash
+# When staging works, deploy to production
+wrangler deploy --env production
+
+# Verify
+curl https://cloudflare-arxiv-rag-prod.klaudioz.workers.dev/health
+```
+
+### Monitoring Ingestion Status
+
+During bulk ingestion, you can monitor:
+
+**Database growth:**
+```bash
+watch -n 5 'wrangler d1 execute arxiv-papers --remote --command "SELECT COUNT(*) FROM papers;" | tail -1'
+```
+
+**Check embedding progress:**
+```bash
+wrangler d1 execute arxiv-papers --remote --command "SELECT COUNT(*) as chunk_count FROM chunks WHERE embedding IS NOT NULL;"
+```
+
+**View ingestion logs:**
+```bash
+wrangler tail --env staging | grep -i ingest
+```
+
+### Troubleshooting Ingestion
+
+**Timeouts during batch processing:**
+- Reduce batch size: `bulkIngestFromJsonl(jsonlContent, 250)` instead of 500
+- Or split JSONL into smaller files manually
+
+**Duplicate key errors:**
+- D1 constraint violated - check if papers already ingested
+- Solution: `DELETE FROM papers WHERE arxiv_id IN (SELECT arxiv_id FROM papers GROUP BY arxiv_id HAVING COUNT(*) > 1);`
+
+**Embedding failures:**
+- Check Workers AI quota: `wrangler ai models list`
+- Verify Workers AI is enabled in your account
+- Check error logs: `wrangler tail --env staging | grep -i embedding`
+
+**Out of memory:**
+- Reduce batch size further
+- Process papers in multiple requests with time delays
+
+### Success Indicators
+
+✅ All 6000 papers imported  
+✅ 12000+ chunks created (average 2 per paper)  
+✅ 12000+ embeddings generated  
+✅ Search queries return relevant results  
+✅ RAG generation provides contextual answers  
+✅ Frontend shows papers in search results  
+
+Your RAG system is now fully populated with 6000 CS.AI papers!
+
 ## Phase 15: AI Search Setup (Final Step!)
 
 ### Dashboard Setup (3 minutes)
