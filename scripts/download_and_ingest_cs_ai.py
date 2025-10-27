@@ -81,8 +81,8 @@ def human_bytes(n):
     return f"{n:.2f} PB"
 
 
-def download_pdf_direct(arxiv_id, dest_path):
-    """Download PDF directly from arXiv using HTTP."""
+def download_pdf_direct(arxiv_id, dest_path, attempt=1, max_attempts=5):
+    """Download PDF directly from arXiv using HTTP with exponential backoff."""
     # Construct URL (works for both old and new formats)
     url = f"https://arxiv.org/pdf/{arxiv_id}.pdf"
     
@@ -93,10 +93,33 @@ def download_pdf_direct(arxiv_id, dest_path):
             with open(dest_path, 'wb') as f:
                 f.write(response.content)
             return True
+        elif response.status_code in [500, 502, 503, 504]:
+            # Server errors - retry with backoff
+            if attempt < max_attempts:
+                wait_time = 2 ** (attempt - 1)  # 1s, 2s, 4s, 8s
+                time.sleep(wait_time)
+                return download_pdf_direct(arxiv_id, dest_path, attempt + 1, max_attempts)
+            else:
+                print(f"    [FAIL] {arxiv_id}: HTTP {response.status_code} after {max_attempts} attempts")
+        elif response.status_code == 404:
+            # Not found - don't retry
+            print(f"    [404] {arxiv_id}: Paper not found")
         else:
             print(f"    [WARN] {arxiv_id}: HTTP {response.status_code}")
+    except requests.Timeout:
+        if attempt < max_attempts:
+            wait_time = 2 ** (attempt - 1)
+            time.sleep(wait_time)
+            return download_pdf_direct(arxiv_id, dest_path, attempt + 1, max_attempts)
+        else:
+            print(f"    [TIMEOUT] {arxiv_id}: After {max_attempts} attempts")
     except Exception as e:
-        print(f"    [ERROR] {arxiv_id}: {type(e).__name__}: {str(e)[:100]}")
+        if attempt < max_attempts and not isinstance(e, (FileNotFoundError, PermissionError)):
+            wait_time = 2 ** (attempt - 1)
+            time.sleep(wait_time)
+            return download_pdf_direct(arxiv_id, dest_path, attempt + 1, max_attempts)
+        else:
+            print(f"    [ERROR] {arxiv_id}: {type(e).__name__}: {str(e)[:80]}")
     return False
 
 
@@ -171,15 +194,8 @@ def download_paper(arxiv_id, pdf_dir, max_retries=3):
     if pdf_path.exists():
         return {"status": "skipped", "arxiv_id": arxiv_id}
     
-    # Download from arXiv using HTTP (direct)
-    downloaded = False
-    for attempt in range(max_retries):
-        if download_pdf_direct(arxiv_id, str(pdf_path)):
-            downloaded = True
-            break
-        time.sleep(0.5)  # Small delay between retries
-    
-    if not downloaded:
+    # Download from arXiv using HTTP (with exponential backoff)
+    if not download_pdf_direct(arxiv_id, str(pdf_path), attempt=1, max_attempts=5):
         return {"status": "failed", "arxiv_id": arxiv_id, "error": "PDF download failed"}
     
     # Extract text from PDF
