@@ -63,28 +63,26 @@ npm run test -- --run
 wrangler deploy --env production
 ```
 
-## Phase 7: AI Search Setup ✅ AUTOMATED
+## Next Phases: Building Full RAG Without AI Search
 
-🎉 **AI Search instance creation is now fully automated!**
+Since AI Search is not yet available, here's the implementation roadmap using available Cloudflare services:
 
-The Worker automatically creates and configures the AI Search instance on first deployment:
+**Phase 7: D1 Database Setup** - Paper storage, chunks, embeddings, ingestion logs
+**Phase 8: Embeddings Pipeline** - Generate embeddings with Workers AI
+**Phase 9: Full-Text Search** - Keyword search on D1
+**Phase 10: Semantic Search** - Vector similarity search
+**Phase 11: Hybrid Search** - Combined keyword + semantic with RRF ranking
+**Phase 12: RAG Generation** - Answer generation with Workers AI LLM
+**Phase 13: Streaming Responses** - Stream answers token-by-token
+**Phase 14: Daily Ingestion** - Automate paper fetching via Workflows
+**Phase 15: Frontend Integration** - Connect UI to new endpoints
+**Phase 16: Caching & Performance** - Add caching layer
+**Phase 17: Monitoring** - Analytics Engine integration
+**Phase 18: Production Hardening** - Testing and security
 
-```bash
-# Option 1: Deploy with automatic AI Search setup
-./scripts/deploy-with-ai-search.sh staging
+**Total: 40-50 hours of focused development to build complete RAG system**
 
-# Option 2: Deploy normally (AI Search creation happens automatically)
-wrangler deploy --env staging
-```
-
-**What happens automatically**:
-1. ✅ Checks if AI Search instance exists
-2. ✅ Creates instance if needed (`arxiv-papers`)
-3. ✅ Configures embedding model (`@hf/baai-bge-base-en-v1.5`)
-4. ✅ Enables auto-sync for daily updates
-5. ✅ Deploys Worker with full RAG functionality
-
-**No manual dashboard steps required!** The system is now 100% automated.
+Starting with **Phase 7: D1 Database Setup** (in progress)
 
 ## API Endpoints
 
