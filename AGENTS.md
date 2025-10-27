@@ -1139,16 +1139,64 @@ cloudflare dashboard → Billing & Usage
 - Production deployment initiated (run ID: 18849928158)
 - URL: `https://cloudflare-arxiv-rag.klaudioz.workers.dev` (when complete)
 
+### Phase 16: Bulk Paper Import (Oct 27, 2025 - IN PROGRESS)
+
+**Script Created**: `scripts/download_and_ingest_cs_ai.py`
+- Downloads 6000 CS.AI papers from arXiv S3 (~10.58 GB)
+- Parallel downloads (8 concurrent) with automatic retry
+- PDF text extraction via pdfplumber (with fallback to arXiv abstract)
+- Generates JSONL manifest for ingestion: `storage/cs-ai-papers.jsonl`
+- Fully resumable on interruption
+- Progress tracking and logging
+
+**Integration Service Updated**: `src/services/ingestion-service.ts`
+- Added `bulkIngestFromJsonl()` method for batch processing
+- Processes papers in configurable batches (default: 500 per batch)
+- Tracks duplicates and errors separately
+- Returns detailed statistics (BulkIngestionResult)
+
+**Documentation Updated**: `README.md`
+- Added "Bulk Import: 6000 CS.AI Papers" section
+- Prerequisite installation: `pip install requests pdfplumber tqdm`
+- AWS CLI configuration for requester-pays access
+- Commands for full download and test mode
+- Troubleshooting guide for common issues
+- Resumption information
+
+**Storage Structure Created**:
+- Added `/storage/` to `.gitignore`
+- Downloads go to: `storage/cs-ai-pdfs/`
+- Manifest generated: `storage/cs-ai-papers.jsonl`
+- Progress log: `storage/download_log.txt`
+
+**Usage**:
+```bash
+# Test mode (100 papers)
+python scripts/download_and_ingest_cs_ai.py --storage-path ./storage --max-papers 100
+
+# Full download (6000 papers, ~4-8 hours)
+python scripts/download_and_ingest_cs_ai.py --storage-path ./storage
+```
+
+**Next Step**: Execute download script (Phase 16 continued)
+
+---
+
 ### Known Issues & Next Steps
 
 **Immediate Action Required**:
-1. ⏳ **AI Search Instance** - Manual setup required
+1. ⏳ **Bulk Paper Download** - Ready to execute
+   - Script: `scripts/download_and_ingest_cs_ai.py`
+   - Estimated time: 4-8 hours
+   - Status: READY - Run when infrastructure is ready
+
+2. ⏳ **AI Search Instance** - Manual setup required
    - Go to: Cloudflare Dashboard → Compute & AI → AI Search
    - Create instance named: `arxiv-papers`
    - Update `wrangler.toml` with binding
    - This will enable full RAG pipeline
 
-2. ⏳ **Tests** - 9 integration test failures (skipped in CI/CD)
+3. ⏳ **Tests** - 9 integration test failures (skipped in CI/CD)
    - Impact: None - tests properly skipped in deploy workflow
    - Status: TODO - Fix mock data and re-enable in ci.yml
 
@@ -1156,9 +1204,10 @@ cloudflare dashboard → Billing & Usage
 1. Verify production deployment (v0.2.1) complete
 2. Test production API endpoints
 3. Create AI Search instance
-4. Configure daily paper ingestion workflow
-5. Monitor Analytics Engine metrics
-6. Fix integration tests and re-enable
+4. Execute bulk paper download (6000 papers, ~10.58 GB)
+5. Trigger bulk ingestion via `/api/v1/ingest/bulk` endpoint
+6. Monitor Analytics Engine metrics
+7. Fix integration tests and re-enable
 
 **Commits Summary** (8 recent):
 - `194a918` - feat: Phase 5 - Add production hardening features

@@ -73,6 +73,96 @@ npm run test -- --run
 wrangler deploy --env production
 ```
 
+## Bulk Import: 6000 CS.AI Papers
+
+Download and ingest all 6000 CS.AI papers (~10.58 GB) into your RAG system:
+
+### Prerequisites
+
+```bash
+# Install Python dependencies
+pip install requests pdfplumber tqdm
+
+# Configure AWS CLI for requester-pays access
+aws configure
+# Enter your AWS credentials (uses your $100+ credits for arXiv access)
+
+# Verify AWS access
+aws s3 ls s3://arxiv --request-payer requester
+```
+
+### Download & Process
+
+```bash
+# Full download (estimated time: 4-8 hours, requires 11 GB free space)
+python scripts/download_and_ingest_cs_ai.py --storage-path ./storage
+
+# Test mode (download first 100 papers to verify setup)
+python scripts/download_and_ingest_cs_ai.py --storage-path ./storage --max-papers 100
+```
+
+### What This Does
+
+1. **Fetches metadata** from arXiv API (6000 paper IDs)
+2. **Parallel downloads** PDFs from S3 (8 concurrent, with retry logic)
+3. **Extracts text** from PDFs (first 3 pages for context)
+4. **Generates JSONL** manifest (`storage/cs-ai-papers.jsonl`)
+5. **Resumes automatically** if interrupted
+
+### Output
+
+After completion, you'll have:
+```
+storage/
+├── cs-ai-pdfs/           # 6000 downloaded PDFs (~10.58 GB)
+├── cs-ai-papers.jsonl    # Ingestion manifest (one JSON per line)
+├── cs_ai_ids.txt         # Paper IDs (for resume)
+└── download_log.txt      # Download progress log
+```
+
+### Next Steps
+
+1. **Deploy** the ingestion service (Phase 8):
+   ```bash
+   wrangler deploy --env staging
+   ```
+
+2. **Trigger bulk ingestion** via API:
+   ```bash
+   curl -X POST https://cloudflare-arxiv-rag-staging.klaudioz.workers.dev/api/v1/ingest/bulk \
+     -H "Content-Type: application/json" \
+     -d '{"jsonl_file": "./storage/cs-ai-papers.jsonl"}'
+   ```
+
+3. **Monitor progress** in Analytics Engine dashboard
+
+### Troubleshooting
+
+**AWS access denied**: 
+- Verify credentials: `aws sts get-caller-identity`
+- Check S3 access: `aws s3 ls s3://arxiv --request-payer requester`
+
+**Insufficient space**:
+- Need 11 GB free (10.58 GB PDFs + 0.5 GB JSONL + overhead)
+- Monitor: `du -sh storage/`
+
+**Download interrupted**:
+- Rerun the same command - script auto-resumes from checkpoints
+- Check `storage/download_log.txt` for progress
+
+**PDF extraction fails**:
+- Fallback: Uses arXiv abstract instead of extracted text
+- Install: `pip install --upgrade pdfplumber`
+
+### Resumption & Resume
+
+The script is fully resumable:
+- **Paper IDs** stored in `storage/cs_ai_ids.txt`
+- **Downloaded PDFs** checked before downloading (skipped if exist)
+- **Progress log** in `storage/download_log.txt`
+
+Simply rerun the command to continue from where it stopped.
+
 ## Phase 15: AI Search Setup (Final Step!)
 
 ### Dashboard Setup (3 minutes)

@@ -26,6 +26,11 @@ export interface IngestionResult {
   duration: number;
 }
 
+export interface BulkIngestionResult extends IngestionResult {
+  duplicatesSkipped: number;
+  batchCount: number;
+}
+
 export class IngestionService {
   constructor(
     private d1Client: D1Client,
@@ -191,6 +196,81 @@ export class IngestionService {
       .replace(/\s+/g, ' ')
       .replace(/&#\d+;/g, '')
       .trim();
+  }
+
+  /**
+   * Bulk ingest papers from JSONL format (one JSON per line)
+   * Processes in batches to avoid timeout/memory issues
+   */
+  async bulkIngestFromJsonl(jsonlContent: string, batchSize: number = 500): Promise<BulkIngestionResult> {
+    const startTime = Date.now();
+    const result: BulkIngestionResult = {
+      totalPapers: 0,
+      successfulPapers: 0,
+      totalChunks: 0,
+      totalEmbeddings: 0,
+      duplicatesSkipped: 0,
+      errors: [],
+      duration: 0,
+      batchCount: 0
+    };
+
+    // Parse JSONL
+    const lines = jsonlContent.trim().split('\n');
+    const papers: ArxivPaper[] = [];
+
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        const doc = JSON.parse(line);
+        papers.push({
+          id: doc.id,
+          title: doc.title,
+          authors: doc.authors || ['Unknown'],
+          abstract: doc.abstract || '',
+          published: doc.published || new Date().toISOString().split('T')[0],
+          arxivId: doc.arxiv_id,
+          category: doc.category || 'cs.AI',
+          pdfUrl: doc.pdf_url || `https://arxiv.org/pdf/${doc.arxiv_id}.pdf`
+        });
+      } catch (e) {
+        console.error(`[IngestionService] Failed to parse JSONL line:`, e);
+      }
+    }
+
+    result.totalPapers = papers.length;
+    console.log(`[IngestionService] Processing ${papers.length} papers in batches of ${batchSize}`);
+
+    // Process in batches
+    for (let i = 0; i < papers.length; i += batchSize) {
+      const batch = papers.slice(i, i + batchSize);
+      result.batchCount++;
+
+      console.log(`[IngestionService] Processing batch ${result.batchCount} (${batch.length} papers)`);
+
+      try {
+        const batchResult = await this.ingestPapers(batch);
+        result.successfulPapers += batchResult.successfulPapers;
+        result.totalChunks += batchResult.totalChunks;
+        result.totalEmbeddings += batchResult.totalEmbeddings;
+        result.errors = result.errors.concat(batchResult.errors);
+
+        // Check for duplicates (if paper exists, it's skipped by d1Client)
+        result.duplicatesSkipped += batch.length - batchResult.successfulPapers;
+      } catch (batchError) {
+        console.error(`[IngestionService] Batch ${result.batchCount} failed:`, batchError);
+        result.errors.push({
+          paperId: `batch-${result.batchCount}`,
+          error: batchError instanceof Error ? batchError.message : 'Unknown batch error'
+        });
+      }
+
+      // Small delay between batches to avoid overwhelming resources
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+
+    result.duration = Date.now() - startTime;
+    return result;
   }
 
   /**
