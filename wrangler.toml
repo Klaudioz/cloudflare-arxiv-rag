@@ -11,6 +11,7 @@ vars = { CLOUDFLARE_ACCOUNT_ID = "031df5f5a704861375de4d9215011341" }
 
 [[env.staging.ai_search]]
 binding = "AI_SEARCH"
+project_name = "arxiv-papers"
 
 [[env.staging.analytics_engine_bindings]]
 binding = "ANALYTICS"
