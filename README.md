@@ -4,6 +4,24 @@
 
 **Status**: 🚀 Production-ready | **Performance**: +70% faster | **Cost**: -98% cheaper
 
+## Deployment Status (Oct 27, 2025)
+
+| Component | Status | URL |
+|-----------|--------|-----|
+| **Staging API** | ✅ Live | https://cloudflare-arxiv-rag-staging.klaudioz.workers.dev |
+| **Production API** | ✅ Live | https://cloudflare-arxiv-rag-prod.klaudioz.workers.dev |
+| **Frontend** | ✅ Live | https://arxiv-rag.pages.dev |
+| **AI Search** | ⏳ Pending | Manual setup required |
+| **R2 Buckets** | ✅ Created | arxiv-papers-staging, arxiv-papers-prod |
+| **CI/CD** | ✅ Active | GitHub Actions deploying to staging + production |
+
+### All 5 Project Phases Complete ✅
+- Phase 1: Setup & Configuration ✅
+- Phase 2: API Layer ✅ (11 endpoints deployed)
+- Phase 3: Data Pipeline ✅ (Workflows code ready)
+- Phase 4: Frontend ✅ (React deployed to Pages)
+- Phase 5: Production Hardening ✅ (Security headers, caching)
+
 > A complete reimplementation of [jamwithai/arxiv-paper-curator](https://github.com/jamwithai/arxiv-paper-curator) using Cloudflare's edge platform. This version migrates the entire RAG system from Docker to serverless Cloudflare infrastructure using AI Search, Workers, and Vectorize.
 
 ## Features
