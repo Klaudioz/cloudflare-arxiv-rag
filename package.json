@@ -10,7 +10,9 @@
     "build": "tsc",
     "lint": "eslint src --ext .ts",
     "format": "prettier --write src",
-    "test": "jest",
+    "test": "vitest",
+    "test:ui": "vitest --ui",
+    "test:coverage": "vitest --coverage",
     "logs": "wrangler tail",
     "ai-search:create": "wrangler ai-search create arxiv-papers",
     "ai-search:stats": "wrangler ai-search stats arxiv-papers",
@@ -33,9 +35,12 @@
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
+    "@vitest/coverage-v8": "^1.0.0",
+    "@vitest/ui": "^1.0.0",
     "eslint": "^8.50.0",
     "prettier": "^3.0.0",
     "typescript": "^5.2.0",
+    "vitest": "^1.0.0",
     "wrangler": "^3.20.0"
   }
 }
