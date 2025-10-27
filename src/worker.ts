@@ -13,6 +13,7 @@ interface Env {
   ANALYTICS: AnalyticsEngineDataPoint;
   CACHE?: KVNamespace;
   DB: D1Database;
+  R2_BUCKET?: R2Bucket;
   ADMIN_API_KEY?: string;
   CLOUDFLARE_ACCOUNT_ID?: string;
   CLOUDFLARE_API_TOKEN?: string;
@@ -172,6 +173,23 @@ app.use('*', async (c, next) => {
     analytics.trackError(c.req.path, String(error), 500);
     return c.json(formatError(error), getStatus(500));
   }
+});
+
+/**
+ * Debug endpoint to see available bindings
+ */
+app.get('/debug/bindings', (c) => {
+  initializeServices(c.env);
+
+  return c.json({
+    bindings: {
+      ai: typeof c.env.AI,
+      analytics: typeof c.env.ANALYTICS,
+      r2: typeof c.env.R2_BUCKET,
+      db: typeof c.env.DB,
+      keys: Object.keys(c.env)
+    }
+  });
 });
 
 /**
