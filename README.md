@@ -11,7 +11,7 @@
 | **Staging API** | ✅ Live | https://cloudflare-arxiv-rag-staging.klaudioz.workers.dev |
 | **Production API** | ✅ Live | https://cloudflare-arxiv-rag-prod.klaudioz.workers.dev |
 | **Frontend** | ✅ Live | https://arxiv-rag.pages.dev |
-| **AI Search** | ⏳ Manual Setup | Create in Cloudflare Dashboard (next step) |
+| **AI Search** | ✅ Automated | Auto-created on deployment (Phase 7) |
 | **R2 Buckets** | ✅ Created | arxiv-papers-staging, arxiv-papers-prod |
 | **Tests** | ✅ 104/104 | All passing in CI/CD |
 | **CI/CD** | ✅ Active | GitHub Actions with automated testing |
@@ -63,21 +63,28 @@ npm run test -- --run
 wrangler deploy --env production
 ```
 
-## Next: Create AI Search Instance
+## Phase 7: AI Search Setup ✅ AUTOMATED
 
-⏳ **Manual Step Required** (5 minutes):
+🎉 **AI Search instance creation is now fully automated!**
 
-1. Go to: https://dash.cloudflare.com/
-2. Navigate to: **Compute & AI** → **AI Search**
-3. Click: **Create** 
-4. Configure:
-   - **Name**: `arxiv-papers`
-   - **Data Source**: REST API
-   - **Endpoint**: `https://export.arxiv.org/api/query`
-   - **Schedule**: Daily at 06:00 UTC
-5. Click: **Deploy**
+The Worker automatically creates and configures the AI Search instance on first deployment:
 
-Once created, the RAG endpoints will be fully operational!
+```bash
+# Option 1: Deploy with automatic AI Search setup
+./scripts/deploy-with-ai-search.sh staging
+
+# Option 2: Deploy normally (AI Search creation happens automatically)
+wrangler deploy --env staging
+```
+
+**What happens automatically**:
+1. ✅ Checks if AI Search instance exists
+2. ✅ Creates instance if needed (`arxiv-papers`)
+3. ✅ Configures embedding model (`@hf/baai-bge-base-en-v1.5`)
+4. ✅ Enables auto-sync for daily updates
+5. ✅ Deploys Worker with full RAG functionality
+
+**No manual dashboard steps required!** The system is now 100% automated.
 
 ## API Endpoints
 
