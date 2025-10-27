@@ -270,10 +270,14 @@ def download_paper(arxiv_id, pdf_dir, max_retries=3):
 # Main Workflow
 # ========================
 
-def main(storage_path: Path, max_papers=None, min_date="2019-01-01"):
+def main(storage_path: Path, max_papers=None, min_date="2019-01-01", categories="cs.AI,cs.LG,cs.CL"):
     """Main download and ingestion workflow."""
     storage_path = storage_path.resolve()
     storage_path.mkdir(parents=True, exist_ok=True)
+    
+    # Parse categories
+    cat_list = [c.strip() for c in categories.split(',')]
+    print(f"Fetching categories: {', '.join(cat_list)}")
     print(f"Filtering papers from {min_date} onwards")
     
     pdf_dir = storage_path / "cs-ai-pdfs"
@@ -321,9 +325,9 @@ def main(storage_path: Path, max_papers=None, min_date="2019-01-01"):
     ids_checkpoint_file = storage_path / "ids_checkpoint.txt"  # Track last successful batch
     
     if not cs_ai_ids_file.exists():
-        print(f"  Fetching CS.AI papers from arXiv API ({effective_max:,} total)...")
+        print(f"  Fetching papers from arXiv API ({effective_max:,} total)...")
         base_url = "http://export.arxiv.org/api/query"
-        paper_ids = []
+        paper_ids = set()  # Use set for automatic deduplication
         start = 0
         batch_size = 2000
         last_checkpoint = 0
@@ -341,14 +345,17 @@ def main(storage_path: Path, max_papers=None, min_date="2019-01-01"):
         # Load any previously fetched IDs
         if cs_ai_ids_file.exists():
             with open(cs_ai_ids_file) as f:
-                paper_ids = [line.strip() for line in f if line.strip()]
+                paper_ids = set(line.strip() for line in f if line.strip())
         
         while len(paper_ids) < effective_max:
             batch_num = (start // batch_size) + 1
             print(f"  Fetching batch {batch_num} (papers {start}-{start + batch_size})...")
             
+            # Build query for all categories
+            cat_query = " OR ".join([f"cat:{cat}" for cat in cat_list])
+            
             params = {
-                'search_query': 'cat:cs.AI',
+                'search_query': cat_query,
                 'start': start,
                 'max_results': min(batch_size, effective_max - len(paper_ids)),
                 'sortBy': 'submittedDate',
@@ -380,6 +387,10 @@ def main(storage_path: Path, max_papers=None, min_date="2019-01-01"):
                     arxiv_id = id_elem.text.split('/abs/')[-1]
                     arxiv_id_base = re.sub(r'v\d+$', '', arxiv_id)
                     
+                    # Skip if already fetched
+                    if arxiv_id_base in paper_ids:
+                        continue
+                    
                     # Filter: only keep new format IDs (YYMM.NNNNN) which have PDFs
                     # Skip old format (category/NNNNN) - PDFs not available
                     if '.' in arxiv_id_base and '/' not in arxiv_id_base:
@@ -395,7 +406,7 @@ def main(storage_path: Path, max_papers=None, min_date="2019-01-01"):
                             
                             # Only include if date >= min_date
                             if paper_date >= min_date:
-                                paper_ids.append(arxiv_id_base)
+                                paper_ids.add(arxiv_id_base)  # Use set.add() instead of append()
                                 found_count += 1
                         except:
                             pass
@@ -420,12 +431,26 @@ def main(storage_path: Path, max_papers=None, min_date="2019-01-01"):
             os.remove(ids_checkpoint_file)
         except:
             pass
+        
+        # Convert set to sorted list and save
+        paper_ids = sorted(list(paper_ids))
+        with open(cs_ai_ids_file, "w") as f:
+            for pid in paper_ids:
+                f.write(pid + "\n")
     else:
         # Load from existing file
         with open(cs_ai_ids_file, "r") as f:
             all_ids = [line.strip() for line in f if line.strip()]
         paper_ids = all_ids if not max_papers else all_ids[:max_papers]
         print(f"  Loaded {len(paper_ids):,} papers from cache")
+    
+    # Save metadata about the fetch
+    metadata_file = storage_path / "fetch_metadata.txt"
+    with open(metadata_file, "w") as f:
+        f.write(f"Categories fetched: {', '.join(cat_list)}\n")
+        f.write(f"Minimum date: {min_date}\n")
+        f.write(f"Total papers: {len(paper_ids):,}\n")
+        f.write(f"Latest version only (v suffixes removed): Yes\n")
     
     print(f"  Total papers to download: {len(paper_ids):,}")
     
@@ -569,11 +594,12 @@ if __name__ == "__main__":
     parser.add_argument("--storage-path", required=True, help="Storage directory path")
     parser.add_argument("--max-papers", type=int, default=None, help="Max papers to download (for testing)")
     parser.add_argument("--min-date", type=str, default="2019-01-01", help="Only download papers from this date onward (format: YYYY-MM-DD, default: 2019-01-01)")
+    parser.add_argument("--categories", type=str, default="cs.AI,cs.LG,cs.CL", help="Comma-separated arXiv categories to fetch (default: cs.AI,cs.LG,cs.CL)")
     
     args = parser.parse_args()
     
     try:
-        main(Path(args.storage_path), max_papers=args.max_papers, min_date=args.min_date)
+        main(Path(args.storage_path), max_papers=args.max_papers, min_date=args.min_date, categories=args.categories)
     except KeyboardInterrupt:
         print("\n\nInterrupted by user. Download can be resumed.")
         sys.exit(0)
