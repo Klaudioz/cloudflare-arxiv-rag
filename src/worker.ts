@@ -4,6 +4,8 @@ import { Validator, formatError, isAppError, RateLimiter, AuthManager, RateLimit
 import { ConfigManager } from './config';
 import { Analytics } from './utils';
 import { papersRouter } from './routes/papers';
+import { searchRouter } from './routes/search';
+import { ragRouter } from './routes/rag';
 import AISearchSetupService from './services/ai-search-setup';
 
 interface Env {
@@ -23,6 +25,8 @@ const app = new Hono<{ Bindings: Env }>();
 
 // Register routers
 app.route('/api/v1/papers', papersRouter);
+app.route('/api/v1/search', searchRouter);
+app.route('/api/v1/rag', ragRouter);
 
 // Initialize services
 let configManager: ConfigManager;
