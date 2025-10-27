@@ -93,8 +93,10 @@ def download_pdf_direct(arxiv_id, dest_path):
             with open(dest_path, 'wb') as f:
                 f.write(response.content)
             return True
+        else:
+            print(f"    [WARN] {arxiv_id}: HTTP {response.status_code}")
     except Exception as e:
-        pass
+        print(f"    [ERROR] {arxiv_id}: {type(e).__name__}: {str(e)[:100]}")
     return False
 
 
