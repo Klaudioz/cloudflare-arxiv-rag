@@ -81,6 +81,20 @@ def human_bytes(n):
     return f"{n:.2f} PB"
 
 
+def is_valid_pdf(file_path, min_size=5000):
+    """Check if PDF is valid (not empty/corrupted)."""
+    try:
+        size = os.path.getsize(file_path)
+        if size < min_size:
+            return False
+        # Check PDF magic bytes
+        with open(file_path, 'rb') as f:
+            header = f.read(4)
+            return header == b'%PDF'
+    except:
+        return False
+
+
 def download_pdf_direct(arxiv_id, dest_path, attempt=1, max_attempts=5):
     """Download PDF directly from arXiv using HTTP with exponential backoff."""
     # Construct URL (works for both old and new formats)
@@ -92,7 +106,20 @@ def download_pdf_direct(arxiv_id, dest_path, attempt=1, max_attempts=5):
         if response.status_code == 200:
             with open(dest_path, 'wb') as f:
                 f.write(response.content)
-            return True
+            
+            # Validate PDF
+            if is_valid_pdf(dest_path):
+                return True
+            else:
+                # PDF is corrupt/empty, delete it and retry
+                os.remove(dest_path)
+                if attempt < max_attempts:
+                    wait_time = 2 ** (attempt - 1)
+                    time.sleep(wait_time)
+                    return download_pdf_direct(arxiv_id, dest_path, attempt + 1, max_attempts)
+                else:
+                    print(f"    [INVALID] {arxiv_id}: Not a valid PDF (possibly error page)")
+                    return False
         elif response.status_code in [500, 502, 503, 504]:
             # Server errors - retry with backoff
             if attempt < max_attempts:
@@ -344,9 +371,22 @@ def main(storage_path: Path, max_papers=None):
     # Step 3: Write JSONL - regenerate for ALL downloaded PDFs
     print(f"\n[Step 3] Writing JSONL manifest for all downloaded PDFs...")
     
-    # Get all downloaded PDF files
-    pdf_files = list(pdf_dir.glob("*.pdf"))
-    print(f"  Found {len(pdf_files)} PDF files")
+    # Get all downloaded PDF files and validate
+    all_pdfs = list(pdf_dir.glob("*.pdf"))
+    pdf_files = [pdf for pdf in all_pdfs if is_valid_pdf(pdf)]
+    invalid_pdfs = len(all_pdfs) - len(pdf_files)
+    
+    print(f"  Found {len(all_pdfs)} PDF files, {len(pdf_files)} valid, {invalid_pdfs} corrupt/empty")
+    
+    # Remove invalid PDFs
+    if invalid_pdfs > 0:
+        print(f"  Removing {invalid_pdfs} invalid PDFs...")
+        for pdf in all_pdfs:
+            if not is_valid_pdf(pdf):
+                try:
+                    os.remove(pdf)
+                except:
+                    pass
     
     ingested_count = 0
     with open(output_jsonl, "w") as f:
