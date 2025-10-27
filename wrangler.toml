@@ -1,14 +1,8 @@
 name = "cloudflare-arxiv-rag"
 account_id = "031df5f5a704861375de4d9215011341"
 workers_dev = true
-
-[build]
-command = "npm run build"
-cwd = "./"
 main = "src/worker.ts"
-
-[build.upload]
-format = "service-worker"
+compatibility_date = "2025-10-27"
 
 [env.staging]
 name = "cloudflare-arxiv-rag-staging"

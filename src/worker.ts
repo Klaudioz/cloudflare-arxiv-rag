@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { AISearchClient, ArxivClient } from './services';
-import { ConfigManager, Validator, formatError, isAppError, ValidationError, RateLimiter, AuthManager, RateLimitError } from './middleware';
+import { Validator, formatError, isAppError, ValidationError, RateLimiter, AuthManager, RateLimitError } from './middleware';
+import { ConfigManager } from './config';
 import { Analytics } from './utils';
 import { papersRouter } from './routes/papers';
 

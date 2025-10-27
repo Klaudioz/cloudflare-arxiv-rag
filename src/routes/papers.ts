@@ -5,6 +5,7 @@
 import { Hono } from 'hono';
 import { IngestionService } from '../services';
 import { formatError, isAppError, ValidationError } from '../middleware';
+import { ArxivClient } from '../services/arxiv-client';
 
 interface Env {
   AI: Ai;
@@ -142,8 +143,7 @@ papersRouter.get('/archive/month/:year/:month', async (c) => {
       throw new ValidationError('Month must be between 1 and 12');
     }
 
-    const ingestionService = new IngestionService();
-    const arxivClient = new (require('../services').ArxivClient)();
+    const arxivClient = new ArxivClient();
     const papers = await arxivClient.fetchByMonth(year, month, category, maxResults);
 
     return c.json({
@@ -175,8 +175,7 @@ papersRouter.get('/archive/year/:year', async (c) => {
       throw new ValidationError('Year is required');
     }
 
-    const ingestionService = new IngestionService();
-    const arxivClient = new (require('../services').ArxivClient)();
+    const arxivClient = new ArxivClient();
     const papers = await arxivClient.fetchByYear(year, category, maxResults);
 
     return c.json({
@@ -212,7 +211,7 @@ papersRouter.get('/archive/range', async (c) => {
       throw new ValidationError('Invalid date format. Use YYYYMMDD');
     }
 
-    const arxivClient = new (require('../services').ArxivClient)();
+    const arxivClient = new ArxivClient();
     const papers = await arxivClient.search({
       query: `cat:${category}`,
       maxResults,
