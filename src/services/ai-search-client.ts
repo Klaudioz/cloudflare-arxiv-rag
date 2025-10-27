@@ -28,13 +28,10 @@ export class AISearchClient {
   /**
    * Search for papers (retrieval only)
    */
-  async search(options: AISearchOptions): Promise<SearchResult[]> {
+  async search(_options: AISearchOptions): Promise<SearchResult[]> {
     try {
-      const { _query, _maxNumResults = 10, _rankingOptions, _filters } = { query: '', maxNumResults: 10, ...options };
-
       // AI Search binding not available yet
       // TODO: Replace with actual AI Search call when binding available
-      // using: _query, _maxNumResults, _rankingOptions, _filters
 
       // Return empty array for now (fallback)
       return [];
@@ -49,22 +46,12 @@ export class AISearchClient {
    */
   async aiSearch(options: AISearchOptions & { model?: string }): Promise<RAGResponse> {
     try {
-      const {
-        query,
-        _maxNumResults = 3,
-        _rewriteQuery = false,
-        _rankingOptions,
-        _filters,
-        _stream = false,
-        _model = '@cf/meta/llama-3.3-70b-instruct-sd'
-      } = { maxNumResults: 3, rewriteQuery: false, stream: false, model: '@cf/meta/llama-3.3-70b-instruct-sd', ...options };
-
+      const { query } = options;
       const startTime = Date.now();
 
       // AI Search binding not available yet - return simulated response
       // Once the AI Search binding is properly configured, this will use the actual API
-      // TODO: Replace with actual AI Search call using:
-      // _maxNumResults, _rewriteQuery, _rankingOptions, _filters, _stream, _model
+      // TODO: Replace with actual AI Search call using all options parameters
       const latency = Date.now() - startTime;
 
       // Simulated response while AI Search binding is being initialized
@@ -87,17 +74,10 @@ export class AISearchClient {
    */
   async aiSearchStream(options: AISearchOptions & { model?: string }): Promise<ReadableStream> {
     try {
-      const {
-        query,
-        _maxNumResults = 3,
-        _rewriteQuery = false,
-        _rankingOptions,
-        _filters,
-        _model = '@cf/meta/llama-3.3-70b-instruct-sd'
-      } = { maxNumResults: 3, rewriteQuery: false, model: '@cf/meta/llama-3.3-70b-instruct-sd', ...options };
+      const { query } = options;
 
       // AI Search binding not available yet - return simulated stream
-      // TODO: Replace with actual AI Search streaming call using parameters above
+      // TODO: Replace with actual AI Search streaming call using all options parameters
       const mockStream = new ReadableStream({
         start(controller) {
           controller.enqueue(`data: {"response":"AI Search instance is initializing. Query: ${query}"}\n\n`);
