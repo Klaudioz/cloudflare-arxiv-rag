@@ -123,3 +123,117 @@ papersRouter.get('/daily/:date', async (c) => {
     return c.json(formatError(error), 500);
   }
 });
+
+/**
+ * GET /papers/archive/month/:year/:month - Get papers from specific month
+ */
+papersRouter.get('/archive/month/:year/:month', async (c) => {
+  try {
+    const year = parseInt(c.req.param('year'));
+    const month = parseInt(c.req.param('month'));
+    const category = c.req.query('category') || 'cs.AI';
+    const maxResults = parseInt(c.req.query('max_results') || '100');
+
+    if (!year || !month) {
+      throw new ValidationError('Year and month are required');
+    }
+
+    if (month < 1 || month > 12) {
+      throw new ValidationError('Month must be between 1 and 12');
+    }
+
+    const ingestionService = new IngestionService();
+    const arxivClient = new (require('../services').ArxivClient)();
+    const papers = await arxivClient.fetchByMonth(year, month, category, maxResults);
+
+    return c.json({
+      success: true,
+      year,
+      month,
+      category,
+      papers_count: papers.length,
+      papers
+    });
+  } catch (error) {
+    if (isAppError(error)) {
+      return c.json(formatError(error), error.statusCode);
+    }
+    return c.json(formatError(error), 500);
+  }
+});
+
+/**
+ * GET /papers/archive/year/:year - Get papers from specific year
+ */
+papersRouter.get('/archive/year/:year', async (c) => {
+  try {
+    const year = parseInt(c.req.param('year'));
+    const category = c.req.query('category') || 'cs.AI';
+    const maxResults = parseInt(c.req.query('max_results') || '100');
+
+    if (!year) {
+      throw new ValidationError('Year is required');
+    }
+
+    const ingestionService = new IngestionService();
+    const arxivClient = new (require('../services').ArxivClient)();
+    const papers = await arxivClient.fetchByYear(year, category, maxResults);
+
+    return c.json({
+      success: true,
+      year,
+      category,
+      papers_count: papers.length,
+      papers
+    });
+  } catch (error) {
+    if (isAppError(error)) {
+      return c.json(formatError(error), error.statusCode);
+    }
+    return c.json(formatError(error), 500);
+  }
+});
+
+/**
+ * GET /papers/archive/range - Get papers from date range
+ */
+papersRouter.get('/archive/range', async (c) => {
+  try {
+    const fromDate = c.req.query('from_date');
+    const toDate = c.req.query('to_date');
+    const category = c.req.query('category') || 'cs.AI';
+    const maxResults = parseInt(c.req.query('max_results') || '100');
+
+    if (!fromDate || !toDate) {
+      throw new ValidationError('from_date and to_date are required (YYYYMMDD format)');
+    }
+
+    if (!/^\d{8}$/.test(fromDate) || !/^\d{8}$/.test(toDate)) {
+      throw new ValidationError('Invalid date format. Use YYYYMMDD');
+    }
+
+    const arxivClient = new (require('../services').ArxivClient)();
+    const papers = await arxivClient.search({
+      query: `cat:${category}`,
+      maxResults,
+      fromDate,
+      toDate,
+      sortBy: 'submittedDate',
+      sortOrder: 'descending'
+    });
+
+    return c.json({
+      success: true,
+      from_date: fromDate,
+      to_date: toDate,
+      category,
+      papers_count: papers.length,
+      papers
+    });
+  } catch (error) {
+    if (isAppError(error)) {
+      return c.json(formatError(error), error.statusCode);
+    }
+    return c.json(formatError(error), 500);
+  }
+});

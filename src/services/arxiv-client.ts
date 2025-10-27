@@ -79,6 +79,93 @@ export class ArxivClient {
   }
 
   /**
+   * Fetch papers from date range
+   */
+  async fetchByDateRange(
+    fromDate: string,
+    toDate: string,
+    category: string = 'cs.AI',
+    maxResults: number = 100
+  ): Promise<ArxivPaper[]> {
+    const query = `cat:${category}`;
+
+    return this.search({
+      query,
+      maxResults,
+      fromDate,
+      toDate,
+      sortBy: 'submittedDate',
+      sortOrder: 'descending'
+    });
+  }
+
+  /**
+   * Fetch papers from last N days
+   */
+  async fetchLastDays(days: number, category: string = 'cs.AI', maxResults: number = 100): Promise<ArxivPaper[]> {
+    const toDate = new Date();
+    const fromDate = new Date(toDate.getTime() - days * 24 * 60 * 60 * 1000);
+
+    const fromDateStr = fromDate.toISOString().split('T')[0].replace(/-/g, '');
+    const toDateStr = toDate.toISOString().split('T')[0].replace(/-/g, '');
+
+    const query = `cat:${category}`;
+
+    return this.search({
+      query,
+      maxResults,
+      fromDate: fromDateStr,
+      toDate: toDateStr,
+      sortBy: 'submittedDate',
+      sortOrder: 'descending'
+    });
+  }
+
+  /**
+   * Fetch papers from specific month
+   */
+  async fetchByMonth(year: number, month: number, category: string = 'cs.AI', maxResults: number = 100): Promise<ArxivPaper[]> {
+    const fromDate = new Date(year, month - 1, 1);
+    const toDate = new Date(year, month, 0); // Last day of month
+
+    const fromDateStr = this.formatDate(fromDate);
+    const toDateStr = this.formatDate(toDate);
+
+    const query = `cat:${category}`;
+
+    return this.search({
+      query,
+      maxResults,
+      fromDate: fromDateStr,
+      toDate: toDateStr,
+      sortBy: 'submittedDate',
+      sortOrder: 'ascending'
+    });
+  }
+
+  /**
+   * Fetch papers from specific year
+   */
+  async fetchByYear(year: number, category: string = 'cs.AI', maxResults: number = 100): Promise<ArxivPaper[]> {
+    const fromDate = new Date(year, 0, 1);
+    const toDate = new Date(year, 11, 31);
+
+    const fromDateStr = this.formatDate(fromDate);
+    const toDateStr = this.formatDate(toDate);
+
+    const query = `cat:${category}`;
+
+    return this.search({
+      query,
+      maxResults,
+      fromDate: fromDateStr,
+      toDate: toDateStr,
+      sortBy: 'submittedDate',
+      sortOrder: 'ascending'
+    });
+  }
+
+  /**
    * Parse Atom feed XML
    */
   private parseAtomFeed(xml: string): ArxivPaper[] {
@@ -160,5 +247,15 @@ export class ArxivClient {
     const regex = new RegExp(`<${tag}[^>]*${attr}="([^"]*)"`, 'i');
     const match = xml.match(regex);
     return match ? match[1] : null;
+  }
+
+  /**
+   * Format date to YYYYMMDD format for arXiv API
+   */
+  private formatDate(date: Date): string {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}${month}${day}`;
   }
 }
