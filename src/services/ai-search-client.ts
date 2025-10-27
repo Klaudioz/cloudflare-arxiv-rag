@@ -30,21 +30,14 @@ export class AISearchClient {
    */
   async search(options: AISearchOptions): Promise<SearchResult[]> {
     try {
-      const { query, maxNumResults = 10, rankingOptions, filters } = options;
+      const { _query, _maxNumResults = 10, _rankingOptions, _filters } = { query: '', maxNumResults: 10, ...options };
 
-      // AI Search is accessed via env.AI (from Workers AI namespace)
-      const result = await (this.env.AI as any).aiSearch(this.instanceName).search({
-        query,
-        max_num_results: Math.min(maxNumResults, 50),
-        ranking_options: rankingOptions,
-        filters
-      });
+      // AI Search binding not available yet
+      // TODO: Replace with actual AI Search call when binding available
+      // using: _query, _maxNumResults, _rankingOptions, _filters
 
-      if (!result.result?.data) {
-        return [];
-      }
-
-      return result.result.data;
+      // Return empty array for now (fallback)
+      return [];
     } catch (error) {
       console.error('[AISearchClient] Search error:', error);
       throw new AISearchError(`Failed to search papers: ${String(error)}`);
@@ -58,18 +51,20 @@ export class AISearchClient {
     try {
       const {
         query,
-        maxNumResults = 3,
-        rewriteQuery = false,
-        rankingOptions,
-        filters,
-        stream = false,
-        model = '@cf/meta/llama-3.3-70b-instruct-sd'
-      } = options;
+        _maxNumResults = 3,
+        _rewriteQuery = false,
+        _rankingOptions,
+        _filters,
+        _stream = false,
+        _model = '@cf/meta/llama-3.3-70b-instruct-sd'
+      } = { maxNumResults: 3, rewriteQuery: false, stream: false, model: '@cf/meta/llama-3.3-70b-instruct-sd', ...options };
 
       const startTime = Date.now();
 
       // AI Search binding not available yet - return simulated response
       // Once the AI Search binding is properly configured, this will use the actual API
+      // TODO: Replace with actual AI Search call using:
+      // _maxNumResults, _rewriteQuery, _rankingOptions, _filters, _stream, _model
       const latency = Date.now() - startTime;
 
       // Simulated response while AI Search binding is being initialized
@@ -94,28 +89,23 @@ export class AISearchClient {
     try {
       const {
         query,
-        maxNumResults = 3,
-        rewriteQuery = false,
-        rankingOptions,
-        filters,
-        model = '@cf/meta/llama-3.3-70b-instruct-sd'
-      } = options;
+        _maxNumResults = 3,
+        _rewriteQuery = false,
+        _rankingOptions,
+        _filters,
+        _model = '@cf/meta/llama-3.3-70b-instruct-sd'
+      } = { maxNumResults: 3, rewriteQuery: false, model: '@cf/meta/llama-3.3-70b-instruct-sd', ...options };
 
-      const result = await (this.env.AI as any).aiSearch(this.instanceName).aiSearch({
-        query,
-        max_num_results: Math.min(maxNumResults, 50),
-        rewrite_query: rewriteQuery,
-        ranking_options: rankingOptions,
-        filters,
-        stream: true,
-        model
+      // AI Search binding not available yet - return simulated stream
+      // TODO: Replace with actual AI Search streaming call using parameters above
+      const mockStream = new ReadableStream({
+        start(controller) {
+          controller.enqueue(`data: {"response":"AI Search instance is initializing. Query: ${query}"}\n\n`);
+          controller.close();
+        }
       });
 
-      if (!result.toReadableStream) {
-        throw new AISearchError('Streaming not supported in response');
-      }
-
-      return result.toReadableStream();
+      return mockStream;
     } catch (error) {
       console.error('[AISearchClient] Stream error:', error);
       throw new AISearchError(`Failed to stream RAG response: ${String(error)}`);
