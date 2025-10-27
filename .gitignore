@@ -51,3 +51,6 @@ papers/
 
 # Bulk download storage (temporary, very large)
 storage/
+
+# arXiv manifest (auto-downloaded by scripts)
+arXiv_pdf_manifest.xml
