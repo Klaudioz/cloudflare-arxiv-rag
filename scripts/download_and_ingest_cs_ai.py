@@ -366,8 +366,12 @@ def main(storage_path: Path, max_papers=None):
                 if id_elem is not None:
                     arxiv_id = id_elem.text.split('/abs/')[-1]
                     arxiv_id_base = re.sub(r'v\d+$', '', arxiv_id)
-                    paper_ids.append(arxiv_id_base)
-                    found_count += 1
+                    
+                    # Filter: only keep new format IDs (YYMM.NNNNN) which have PDFs
+                    # Skip old format (category/NNNNN) - PDFs not available
+                    if '.' in arxiv_id_base and '/' not in arxiv_id_base:
+                        paper_ids.append(arxiv_id_base)
+                        found_count += 1
             
             if found_count == 0:
                 print(f"  No more papers found. Total: {len(paper_ids):,}")
