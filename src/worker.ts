@@ -1,149 +1,157 @@
 import { Hono } from 'hono';
+import { AISearchClient, ArxivClient } from './services';
+import { ConfigManager, Validator, formatError, isAppError, ValidationError } from './middleware';
+import { Analytics } from './utils';
 
 interface Env {
   AI: Ai;
   ANALYTICS: AnalyticsEngineDataPoint;
+  CACHE?: KVNamespace;
 }
 
 const app = new Hono<{ Bindings: Env }>();
+
+// Initialize services
+let configManager: ConfigManager;
+let analytics: Analytics;
+let aiSearchClient: AISearchClient;
+let arxivClient: ArxivClient;
+
+/**
+ * Initialize services on first request
+ */
+function initializeServices(env: Env) {
+  if (!configManager) {
+    configManager = new ConfigManager(env);
+    analytics = new Analytics(env, {
+      enabled: configManager.get('analytics.enabled'),
+      sampleRate: configManager.get('analytics.sampleRate')
+    });
+    aiSearchClient = new AISearchClient(env, configManager.get('aiSearch.instanceName'));
+    arxivClient = new ArxivClient();
+  }
+}
 
 /**
  * Health check endpoint
  */
 app.get('/health', (c) => {
+  initializeServices(c.env);
+
   return c.json({
     status: 'ok',
     timestamp: Date.now(),
     service: 'cloudflare-arxiv-rag',
-    version: '0.1.0'
+    version: '0.1.0',
+    config: {
+      environment: configManager.get('env'),
+      aiSearch: configManager.get('aiSearch.instanceName')
+    }
   });
 });
 
 /**
  * Search endpoint - retrieval only (no generation)
- * 
- * @param query - Search query
- * @param max_results - Max results to return (default: 10, max: 50)
- * @returns Array of matching papers
  */
 app.post('/api/v1/search', async (c) => {
   try {
-    const { query, max_results = 10 } = await c.req.json();
+    initializeServices(c.env);
+    const data = await c.req.json();
 
-    if (!query) {
-      return c.json({ error: 'query is required' }, 400);
-    }
+    // Validate input
+    Validator.validateSearchRequest(data);
 
-    if (max_results > 50) {
-      return c.json({ error: 'max_results cannot exceed 50' }, 400);
-    }
-
-    // AI Search: pure retrieval
-    const results = await c.env.AI.aiSearch('arxiv-papers').search({
-      query,
-      max_num_results: max_results
-    });
-
-    // Track analytics
-    trackMetric(c.env, 'search_request', 1, { query_length: query.length });
-
-    return c.json({
-      success: true,
-      query,
-      results_count: results.data?.length || 0,
-      data: results.data || []
-    });
-  } catch (error) {
-    console.error('Search error:', error);
-    trackMetric(c.env, 'search_error', 1, { error_type: 'search' });
-    return c.json({ error: 'Search failed' }, 500);
-  }
-});
-
-/**
- * RAG endpoint - retrieval + AI generation
- * 
- * @param query - User question
- * @param top_k - Number of papers to retrieve (default: 3, max: 10)
- * @returns Generated answer with source papers
- */
-app.post('/api/v1/ask', async (c) => {
-  try {
-    const { query, top_k = 3 } = await c.req.json();
-
-    if (!query) {
-      return c.json({ error: 'query is required' }, 400);
-    }
-
-    if (top_k > 10) {
-      return c.json({ error: 'top_k cannot exceed 10' }, 400);
-    }
-
+    const { query, max_results = 10 } = data;
     const startTime = Date.now();
 
-    // AI Search: retrieval + generation
-    const response = await c.env.AI.aiSearch('arxiv-papers').aiSearch({
+    // AI Search: pure retrieval
+    const results = await aiSearchClient.search({
       query,
-      max_num_results: top_k,
-      stream: false,
-      model: '@cf/meta/llama-3.3-70b-instruct-sd'
+      maxNumResults: max_results
     });
 
     const latency = Date.now() - startTime;
 
     // Track analytics
-    trackMetric(c.env, 'rag_request', latency, { 
-      query_length: query.length,
-      top_k
-    });
+    analytics.trackSearchRequest(query, results.length, latency);
 
     return c.json({
       success: true,
       query,
-      response: response.result?.response || '',
-      sources: response.result?.data || [],
+      results_count: results.length,
       latency_ms: latency,
-      cache_hit: latency < 100 // Heuristic: cache hits are very fast
+      data: results
     });
   } catch (error) {
-    console.error('RAG error:', error);
-    trackMetric(c.env, 'rag_error', 1, { error_type: 'rag' });
-    return c.json({ error: 'RAG request failed' }, 500);
+    if (isAppError(error)) {
+      analytics.trackError('/api/v1/search', error.message, error.statusCode);
+      return c.json(formatError(error), error.statusCode);
+    }
+    analytics.trackError('/api/v1/search', String(error), 500);
+    return c.json(formatError(error), 500);
+  }
+});
+
+/**
+ * RAG endpoint - retrieval + AI generation
+ */
+app.post('/api/v1/ask', async (c) => {
+  try {
+    initializeServices(c.env);
+    const data = await c.req.json();
+
+    // Validate input
+    Validator.validateRAGRequest(data);
+
+    const { query, top_k = 3 } = data;
+
+    // AI Search: retrieval + generation
+    const response = await aiSearchClient.aiSearch({
+      query,
+      maxNumResults: top_k,
+      stream: false,
+      model: '@cf/meta/llama-3.3-70b-instruct-sd'
+    });
+
+    // Track analytics
+    analytics.trackRAGRequest(query, response.latency_ms, response.cache_hit, top_k);
+
+    return c.json(response);
+  } catch (error) {
+    if (isAppError(error)) {
+      analytics.trackError('/api/v1/ask', error.message, error.statusCode);
+      return c.json(formatError(error), error.statusCode);
+    }
+    analytics.trackError('/api/v1/ask', String(error), 500);
+    return c.json(formatError(error), 500);
   }
 });
 
 /**
  * Streaming RAG endpoint - real-time response streaming
- * 
- * @param query - User question
- * @param top_k - Number of papers to retrieve (default: 3, max: 10)
- * @returns Server-Sent Events stream
  */
 app.post('/api/v1/stream', async (c) => {
   try {
-    const { query, top_k = 3 } = await c.req.json();
+    initializeServices(c.env);
+    const data = await c.req.json();
 
-    if (!query) {
-      return c.json({ error: 'query is required' }, 400);
-    }
+    // Validate input
+    Validator.validateRAGRequest(data);
 
-    if (top_k > 10) {
-      return c.json({ error: 'top_k cannot exceed 10' }, 400);
-    }
+    const { query, top_k = 3 } = data;
 
     // AI Search: retrieval + streaming generation
-    const response = await c.env.AI.aiSearch('arxiv-papers').aiSearch({
+    const response = await aiSearchClient.aiSearchStream({
       query,
-      max_num_results: top_k,
-      stream: true,
+      maxNumResults: top_k,
       model: '@cf/meta/llama-3.3-70b-instruct-sd'
     });
 
     // Track analytics
-    trackMetric(c.env, 'stream_request', 1, { query_length: query.length });
+    analytics.trackRAGRequest(query, 0, false, top_k);
 
     // Return streaming response
-    return new Response(response.toReadableStream(), {
+    return new Response(response, {
       headers: {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
@@ -151,9 +159,12 @@ app.post('/api/v1/stream', async (c) => {
       }
     });
   } catch (error) {
-    console.error('Stream error:', error);
-    trackMetric(c.env, 'stream_error', 1, { error_type: 'stream' });
-    return c.json({ error: 'Stream request failed' }, 500);
+    if (isAppError(error)) {
+      analytics.trackError('/api/v1/stream', error.message, error.statusCode);
+      return c.json(formatError(error), error.statusCode);
+    }
+    analytics.trackError('/api/v1/stream', String(error), 500);
+    return c.json(formatError(error), 500);
   }
 });
 
@@ -161,31 +172,40 @@ app.post('/api/v1/stream', async (c) => {
  * Metrics endpoint - cache and performance stats
  */
 app.get('/api/v1/metrics', async (c) => {
-  return c.json({
-    service: 'cloudflare-arxiv-rag',
-    timestamp: Date.now(),
-    features: {
-      ai_search: 'enabled',
-      similarity_cache: 'enabled',
-      streaming: 'enabled'
-    },
-    note: 'Full metrics available in Cloudflare Dashboard'
-  });
+  try {
+    initializeServices(c.env);
+
+    const stats = await aiSearchClient.getStats();
+
+    return c.json({
+      service: 'cloudflare-arxiv-rag',
+      timestamp: Date.now(),
+      features: {
+        ai_search: 'enabled',
+        similarity_cache: 'enabled',
+        streaming: 'enabled'
+      },
+      stats: {
+        documentsIndexed: stats.documentsIndexed,
+        cacheHitRate: `${(stats.cacheHitRate * 100).toFixed(2)}%`,
+        lastSync: stats.lastSyncTime
+      }
+    });
+  } catch (error) {
+    console.error('Metrics error:', error);
+    return c.json({ error: 'Failed to retrieve metrics' }, 500);
+  }
 });
 
 /**
- * Helper function to track metrics
+ * Error handling middleware
  */
-function trackMetric(env: Env, name: string, value: number, tags?: Record<string, any>) {
-  try {
-    env.ANALYTICS.writeDataPoint({
-      indexes: [name, ...(tags ? Object.values(tags) : [])],
-      blobs: [JSON.stringify(tags || {})],
-      doubles: [value]
-    });
-  } catch (e) {
-    console.error('Analytics error:', e);
+app.onError((err, c) => {
+  console.error('Handler error:', err);
+  if (isAppError(err)) {
+    return c.json(formatError(err), err.statusCode);
   }
-}
+  return c.json(formatError(err), 500);
+});
 
 export default app;
