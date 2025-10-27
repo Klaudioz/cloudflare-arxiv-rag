@@ -101,6 +101,22 @@ function initializeServices(env: Env) {
 }
 
 /**
+ * CORS middleware
+ */
+app.use('*', (c, next) => {
+  c.header('Access-Control-Allow-Origin', '*');
+  c.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  c.header('Access-Control-Allow-Headers', 'Content-Type, x-api-key, Authorization');
+  c.header('Access-Control-Max-Age', '86400');
+  
+  if (c.req.method === 'OPTIONS') {
+    return c.text('', 204);
+  }
+  
+  return next();
+});
+
+/**
  * Security headers middleware
  */
 app.use('*', (c, next) => {
@@ -119,8 +135,8 @@ app.use('*', async (c, next) => {
   try {
     initializeServices(c.env);
 
-    // Skip auth for health check
-    if (c.req.path === '/health') {
+    // Skip auth for health check endpoints
+    if (c.req.path === '/health' || c.req.path === '/api/v1/health') {
       return next();
     }
 
@@ -159,9 +175,28 @@ app.use('*', async (c, next) => {
 });
 
 /**
- * Health check endpoint
+ * Health check endpoints (both paths for compatibility)
  */
 app.get('/health', (c) => {
+  initializeServices(c.env);
+
+  const response = c.json({
+    status: 'ok',
+    timestamp: Date.now(),
+    service: 'cloudflare-arxiv-rag',
+    version: '0.1.0',
+    config: {
+      environment: configManager.get('env'),
+      aiSearch: configManager.get('aiSearch.instanceName')
+    }
+  });
+
+  // Cache health check for 1 minute
+  c.header('Cache-Control', 'public, max-age=60');
+  return response;
+});
+
+app.get('/api/v1/health', (c) => {
   initializeServices(c.env);
 
   const response = c.json({

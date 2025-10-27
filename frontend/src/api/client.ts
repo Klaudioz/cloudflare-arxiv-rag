@@ -9,9 +9,12 @@ export class APIClient {
   private client: AxiosInstance;
   private apiKey: string = '';
 
-  constructor(baseURL: string = '/api/v1') {
+  constructor(baseURL?: string) {
+    // Use environment variable or default to staging API
+    const apiUrl = baseURL || import.meta.env.VITE_API_URL || 'https://cloudflare-arxiv-rag-staging.klaudioz.workers.dev/api/v1';
+    
     this.client = axios.create({
-      baseURL,
+      baseURL: apiUrl,
       timeout: 30000,
       headers: {
         'Content-Type': 'application/json',
