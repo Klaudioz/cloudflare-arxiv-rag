@@ -11,9 +11,10 @@
 | **Staging API** | ✅ Live | https://cloudflare-arxiv-rag-staging.klaudioz.workers.dev |
 | **Production API** | ✅ Live | https://cloudflare-arxiv-rag-prod.klaudioz.workers.dev |
 | **Frontend** | ✅ Live | https://arxiv-rag.pages.dev |
-| **AI Search** | ⏳ Pending | Manual setup required |
+| **AI Search** | ⏳ Manual Setup | Create in Cloudflare Dashboard (next step) |
 | **R2 Buckets** | ✅ Created | arxiv-papers-staging, arxiv-papers-prod |
-| **CI/CD** | ✅ Active | GitHub Actions deploying to staging + production |
+| **Tests** | ✅ 104/104 | All passing in CI/CD |
+| **CI/CD** | ✅ Active | GitHub Actions with automated testing |
 
 ### All 5 Project Phases Complete ✅
 - Phase 1: Setup & Configuration ✅
@@ -21,6 +22,7 @@
 - Phase 3: Data Pipeline ✅ (Workflows code ready)
 - Phase 4: Frontend ✅ (React deployed to Pages)
 - Phase 5: Production Hardening ✅ (Security headers, caching)
+- Phase 6: Testing & CI/CD ✅ (104 tests, automated pipeline)
 
 > A complete reimplementation of [jamwithai/arxiv-paper-curator](https://github.com/jamwithai/arxiv-paper-curator) using Cloudflare's edge platform. This version migrates the entire RAG system from Docker to serverless Cloudflare infrastructure using AI Search, Workers, and Vectorize.
 
@@ -48,15 +50,34 @@ wrangler login
 wrangler r2 bucket create arxiv-papers-staging
 wrangler r2 bucket create arxiv-papers-prod
 
-# Create AI Search instance
-wrangler ai-search create arxiv-papers
-
-# Deploy to staging
+# Deploy to staging (AI Search binding auto-configured)
 wrangler deploy --env staging
 
-# Access
-curl https://cloudflare-arxiv-rag-staging.workers.dev/api/v1/health
+# Test health endpoint
+curl https://cloudflare-arxiv-rag-staging.klaudioz.workers.dev/health
+
+# Run tests
+npm run test -- --run
+
+# Deploy to production
+wrangler deploy --env production
 ```
+
+## Next: Create AI Search Instance
+
+⏳ **Manual Step Required** (5 minutes):
+
+1. Go to: https://dash.cloudflare.com/
+2. Navigate to: **Compute & AI** → **AI Search**
+3. Click: **Create** 
+4. Configure:
+   - **Name**: `arxiv-papers`
+   - **Data Source**: REST API
+   - **Endpoint**: `https://export.arxiv.org/api/query`
+   - **Schedule**: Daily at 06:00 UTC
+5. Click: **Deploy**
+
+Once created, the RAG endpoints will be fully operational!
 
 ## API Endpoints
 
