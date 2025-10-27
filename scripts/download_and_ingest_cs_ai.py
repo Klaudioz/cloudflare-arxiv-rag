@@ -227,20 +227,23 @@ def main(storage_path: Path, max_papers=None):
     # Step 1: Load paper IDs
     print("\n[Step 1] Loading CS.AI paper IDs...")
     
+    # Determine max papers to fetch
+    effective_max = max_papers if max_papers else 6000
+    
     # Check if we have cs_ai_ids.txt from previous run
     cs_ai_ids_file = storage_path / "cs_ai_ids.txt"
     if not cs_ai_ids_file.exists():
-        print("  Fetching CS.AI papers from arXiv API...")
+        print(f"  Fetching CS.AI papers from arXiv API (max: {effective_max})...")
         base_url = "http://export.arxiv.org/api/query"
         paper_ids = []
         start = 0
         batch_size = 2000
         
-        while True:
+        while len(paper_ids) < effective_max:
             params = {
                 'search_query': 'cat:cs.AI',
                 'start': start,
-                'max_results': batch_size,
+                'max_results': min(batch_size, effective_max - len(paper_ids)),
                 'sortBy': 'submittedDate',
                 'sortOrder': 'ascending'
             }
@@ -256,35 +259,32 @@ def main(storage_path: Path, max_papers=None):
             found_count = 0
             
             for entry in root.findall('.//{http://www.w3.org/2005/Atom}entry'):
+                if len(paper_ids) >= effective_max:
+                    break
                 id_elem = entry.find('{http://www.w3.org/2005/Atom}id')
                 if id_elem is not None:
                     arxiv_id = id_elem.text.split('/abs/')[-1]
                     arxiv_id_base = re.sub(r'v\d+$', '', arxiv_id)
                     paper_ids.append(arxiv_id_base)
                     found_count += 1
-                    
-                    if max_papers and len(paper_ids) >= max_papers:
-                        break
             
-            if found_count == 0 or (max_papers and len(paper_ids) >= max_papers):
+            if found_count == 0:
                 break
             
             start += batch_size
             time.sleep(2)  # Rate limiting
         
-        # Save IDs for resume capability
+        # Save IDs for resume capability (save ALL fetched, not just the limit)
         with open(cs_ai_ids_file, "w") as f:
             for pid in paper_ids:
                 f.write(pid + "\n")
     else:
-        # Load from existing file
+        # Load from existing file, but respect max_papers limit
         with open(cs_ai_ids_file, "r") as f:
-            paper_ids = [line.strip() for line in f if line.strip()]
+            all_ids = [line.strip() for line in f if line.strip()]
+        paper_ids = all_ids[:effective_max]
     
-    if max_papers:
-        paper_ids = paper_ids[:max_papers]
-    
-    print(f"  Found {len(paper_ids)} papers to download")
+    print(f"  Loaded {len(paper_ids)} papers for download")
     
     # Step 2: Parallel download
     print(f"\n[Step 2] Downloading {len(paper_ids)} PDFs (parallel)...")
