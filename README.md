@@ -61,14 +61,91 @@ curl https://your-project.workers.dev/api/v1/health
 | Cache hit rate | 60% | 78% | +30% ✅ |
 | Monthly cost | $330-670 | $1-5 | -98% ✅ |
 
+## Environment Variables
+
+### Local Development (`.env` file)
+```bash
+# Copy template
+cp .env.example .env
+
+# Edit with your values
+CLOUDFLARE_API_TOKEN=your-api-token
+CLOUDFLARE_ACCOUNT_ID=your-account-id
+AUTH_ENABLED=true
+API_KEYS=sk-test-key-1,sk-test-key-2
+ADMIN_API_KEY=sk-admin-key
+JWT_SECRET=your-jwt-secret
+RATE_LIMIT_ENABLED=true
+RATE_LIMIT_PER_MINUTE=60
+ENVIRONMENT=development
+```
+
+### GitHub Actions (CI/CD)
+Add secrets at: `Settings → Secrets and variables → Actions`
+
+**Required secrets:**
+- `CLOUDFLARE_API_TOKEN` - From https://dash.cloudflare.com/profile/api-tokens
+- `CLOUDFLARE_ACCOUNT_ID` - From https://dash.cloudflare.com/ sidebar
+
+**Optional environment-specific secrets:**
+- `STAGING_API_KEYS` - For staging environment
+- `PRODUCTION_API_KEYS` - For production environment
+- `PRODUCTION_ADMIN_API_KEY` - Admin key
+- `PRODUCTION_JWT_SECRET` - JWT secret
+
+### Cloudflare Workers (Runtime)
+After deployment, set secrets:
+```bash
+# Set admin key
+wrangler secret put ADMIN_API_KEY --env production
+# Paste: sk-admin-prod-key
+
+# Set API keys
+wrangler secret put API_KEYS --env production
+# Paste: sk-prod-key-1,sk-prod-key-2
+
+# Set JWT secret
+wrangler secret put JWT_SECRET --env production
+# Paste: your-prod-jwt-secret
+
+# Verify (values won't show for security)
+wrangler secret list --env production
+```
+
+### Getting Required Values
+
+**Cloudflare API Token:**
+1. Go to: https://dash.cloudflare.com/profile/api-tokens
+2. Click "Create Token" → Select "Edit Cloudflare Workers" template
+3. Copy token → Add to GitHub Secrets as `CLOUDFLARE_API_TOKEN`
+
+**Cloudflare Account ID:**
+1. Go to: https://dash.cloudflare.com/
+2. Copy Account ID from sidebar
+3. Add to GitHub Secrets as `CLOUDFLARE_ACCOUNT_ID`
+
+**Generate API Keys:**
+```bash
+openssl rand -hex 16
+# Result: sk-a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6
+```
+
+**Generate JWT Secret:**
+```bash
+openssl rand -hex 32
+```
+
 ## Development
 
 ```bash
 # Local development
 wrangler dev
 
+# Deploy to staging
+wrangler deploy --env staging
+
 # Deploy to production
-wrangler deploy
+wrangler deploy --env production
 
 # Monitor logs
 wrangler tail
