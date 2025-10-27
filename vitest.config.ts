@@ -5,6 +5,7 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: ['tests/**/*.test.ts'],
+    exclude: ['tests/e2e/**'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],
@@ -13,7 +14,13 @@ export default defineConfig({
         'src/**/*.d.ts',
         'src/worker.ts',
         'src/workflows.ts'
-      ]
-    }
+      ],
+      lines: 80,
+      functions: 80,
+      branches: 75,
+      statements: 80
+    },
+    testTimeout: 10000,
+    hookTimeout: 10000
   }
 });
