@@ -31,7 +31,7 @@ import os
 import re
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
@@ -326,7 +326,7 @@ class ArxivDownloader:
         min_ts = f"{min_parts[0]}{min_parts[1]}{min_parts[2]}0000"
         
         # Dynamic upper bound (current date)
-        now = datetime.now(datetime.timezone.utc)
+        now = datetime.now(timezone.utc)
         max_ts = now.strftime('%Y%m%d2359')
         
         # Build query with categories and date range
