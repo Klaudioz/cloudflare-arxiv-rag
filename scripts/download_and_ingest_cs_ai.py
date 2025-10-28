@@ -250,33 +250,30 @@ class ArxivDownloader:
         # Replace slashes with dash for old format
         return arxiv_id.replace('/', '-').replace('.', '-')
     
-    def _download_worker(self, arxiv_id: str) -> dict:
+    def _download_worker(self, arxiv_id: str, skip_pdfs: bool = False) -> dict:
         """Download single paper and extract metadata."""
         arxiv_id_norm = self._normalize_arxiv_id(arxiv_id)
-        safe_name = self._safe_filename(arxiv_id_norm)
-        pdf_path = self.pdf_dir / f"{safe_name}.pdf"
         
-        # Skip if exists
-        if pdf_path.exists() and self._is_valid_pdf(pdf_path):
-            return {"status": "skipped", "arxiv_id": arxiv_id_norm}
-        
-        # Download PDF
-        if not self._download_pdf(arxiv_id_norm, pdf_path):
-            return {"status": "failed", "arxiv_id": arxiv_id_norm}
-        
-        # Extract text
-        text = self._extract_text(pdf_path)
-        
-        # Fetch metadata from API
+        # Fetch metadata from API (reliable - no reCAPTCHA)
         metadata = self._fetch_metadata(arxiv_id_norm)
         if not metadata:
-            metadata = {
-                "title": f"arXiv {arxiv_id_norm}",
-                "abstract": text[:500] if text else "",
-                "authors": ["Unknown"],
-                "published": "",
-                "categories": []
-            }
+            self.logger.debug(f"Failed to fetch metadata for {arxiv_id_norm}")
+            return {"status": "failed", "arxiv_id": arxiv_id_norm}
+        
+        # Try PDF download if not skipped (optional - may fail with reCAPTCHA)
+        extracted_text = ""
+        if not skip_pdfs:
+            safe_name = self._safe_filename(arxiv_id_norm)
+            pdf_path = self.pdf_dir / f"{safe_name}.pdf"
+            
+            if not (pdf_path.exists() and self._is_valid_pdf(pdf_path)):
+                if self._download_pdf(arxiv_id_norm, pdf_path):
+                    extracted_text = self._extract_text(pdf_path)
+                    self.logger.debug(f"Extracted {len(extracted_text)} chars from {arxiv_id_norm}")
+                else:
+                    self.logger.debug(f"PDF download failed for {arxiv_id_norm} - using abstract")
+            else:
+                extracted_text = self._extract_text(pdf_path)
         
         record = {
             "status": "success",
@@ -285,8 +282,8 @@ class ArxivDownloader:
             "abstract": metadata["abstract"],
             "authors": metadata["authors"],
             "published": metadata["published"],
-            "categories": metadata["categories"],  # KEY: per-paper categories
-            "extracted_text": text,
+            "categories": metadata["categories"],
+            "extracted_text": extracted_text,  # Empty if skip_pdfs or download failed
             "pdf_url": f"https://arxiv.org/pdf/{arxiv_id_norm}.pdf"
         }
         
@@ -378,9 +375,12 @@ class ArxivDownloader:
         
         return ids_list
     
-    def download_papers(self, paper_ids: list, max_workers: int = 8, max_retries: int = 3):
+    def download_papers(self, paper_ids: list, max_workers: int = 8, max_retries: int = 3, skip_pdfs: bool = False):
         """Download all papers with retry logic."""
-        self.logger.info(f"Downloading {len(paper_ids)} papers...")
+        if skip_pdfs:
+            self.logger.info(f"Fetching metadata for {len(paper_ids)} papers (PDFs skipped)...")
+        else:
+            self.logger.info(f"Downloading {len(paper_ids)} papers (with PDFs)...")
         
         to_retry = paper_ids.copy()
         
@@ -392,7 +392,7 @@ class ArxivDownloader:
             failed_this_pass = []
             
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                futures = {executor.submit(self._download_worker, pid): pid for pid in to_retry}
+                futures = {executor.submit(self._download_worker, pid, skip_pdfs): pid for pid in to_retry}
                 
                 iterator = tqdm(as_completed(futures), total=len(futures), desc=f"Download P{retry_attempt}") if tqdm else as_completed(futures)
                 
@@ -480,6 +480,7 @@ def main():
     parser.add_argument("--min-date", default="2017-02-27", help="Minimum date (YYYY-MM-DD)")
     parser.add_argument("--max-papers", type=int, default=None, help="Max papers (for testing)")
     parser.add_argument("--max-workers", type=int, default=8, help="Parallel workers")
+    parser.add_argument("--skip-pdfs", action="store_true", help="Skip PDF downloads, use abstracts only")
     
     args = parser.parse_args()
     
@@ -491,8 +492,8 @@ def main():
         if args.max_papers:
             paper_ids = paper_ids[:args.max_papers]
         
-        # Download with retries
-        downloader.download_papers(paper_ids, max_workers=args.max_workers, max_retries=3)
+        # Download with retries (or fetch metadata only if --skip-pdfs)
+        downloader.download_papers(paper_ids, max_workers=args.max_workers, max_retries=3, skip_pdfs=args.skip_pdfs)
         
         # Generate manifest
         downloader.generate_manifest()
