@@ -393,34 +393,52 @@ class ArxivDownloader:
             self.logger.info(f"Downloading {len(paper_ids)} papers (with PDFs)...")
         
         to_retry = paper_ids.copy()
+        start_time = time.time()
         
         for retry_attempt in range(1, max_retries + 1):
             if not to_retry:
                 break
             
             self.logger.info(f"Pass {retry_attempt}/{max_retries}: {len(to_retry)} papers")
+            self.logger.info(f"  Starting {len(to_retry)} parallel workers ({max_workers} max concurrency)...")
             failed_this_pass = []
+            completed_in_pass = 0
             
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 futures = {executor.submit(self._download_worker, pid, skip_pdfs): pid for pid in to_retry}
+                submitted_time = time.time()
+                self.logger.info(f"  Submitted all {len(futures)} tasks at {submitted_time - start_time:.1f}s")
                 
                 iterator = tqdm(as_completed(futures), total=len(futures), desc=f"Download P{retry_attempt}") if tqdm else as_completed(futures)
                 
-                for future in iterator:
+                for idx, future in enumerate(iterator, 1):
                     try:
-                        result = future.result()
+                        result = future.result(timeout=60)  # Add timeout
                         status = result["status"]
+                        arxiv_id = result.get("arxiv_id", "unknown")
                         
                         if status == "success":
                             self.stats["success"] += 1
+                            completed_in_pass += 1
+                            if idx % 100 == 0:  # Log every 100 papers
+                                elapsed = time.time() - start_time
+                                rate = self.stats["success"] / (elapsed / 60) if elapsed > 0 else 0
+                                self.logger.info(f"  Progress: {self.stats['success']}/{len(paper_ids)} papers ({100*self.stats['success']//len(paper_ids)}%) | {rate:.1f} papers/min | ETA: {(len(paper_ids)-self.stats['success'])/(rate+0.001)/60:.1f}h")
                         elif status == "failed":
-                            failed_this_pass.append(result["arxiv_id"])
+                            failed_this_pass.append(arxiv_id)
                         else:
                             self.stats["skipped"] += 1
+                    except TimeoutError:
+                        arxiv_id = futures.get(future, "unknown")
+                        self.logger.warning(f"  Timeout on {arxiv_id} (task {idx}/{len(futures)})")
+                        failed_this_pass.append(arxiv_id)
                     except Exception as e:
-                        self.logger.error(f"Worker error: {e}")
-                        failed_this_pass.append(futures[future])
+                        arxiv_id = futures.get(future, "unknown")
+                        self.logger.error(f"  Worker error on {arxiv_id}: {e}")
+                        failed_this_pass.append(arxiv_id)
             
+            pass_elapsed = time.time() - start_time
+            self.logger.info(f"  Pass {retry_attempt} complete: {completed_in_pass} successful, {len(failed_this_pass)} failed | Elapsed: {pass_elapsed:.1f}s")
             to_retry = failed_this_pass
         
         # Final failures
@@ -492,6 +510,7 @@ def main():
     parser.add_argument("--max-workers", type=int, default=8, help="Parallel workers")
     parser.add_argument("--skip-pdfs", action="store_true", help="Skip PDF downloads, use abstracts only")
     parser.add_argument("--skip-fetch", action="store_true", help="Skip ID fetching, use existing cs_ai_ids.txt")
+    parser.add_argument("--use-existing-metadata", action="store_true", help="Skip metadata fetch, use existing metadata.jsonl")
     
     args = parser.parse_args()
     
@@ -515,8 +534,16 @@ def main():
             paper_ids = paper_ids[:args.max_papers]
             downloader.logger.info(f"Limited to {len(paper_ids)} papers (--max-papers)")
         
-        # Download with retries (or fetch metadata only if --skip-pdfs)
-        downloader.download_papers(paper_ids, max_workers=args.max_workers, max_retries=3, skip_pdfs=args.skip_pdfs)
+        # Download/fetch metadata (unless using existing)
+        if args.use_existing_metadata:
+            if downloader.output_jsonl.exists():
+                downloader.logger.info(f"Using existing metadata from {downloader.output_jsonl} (--use-existing-metadata)")
+            else:
+                downloader.logger.error(f"--use-existing-metadata specified but {downloader.output_jsonl} not found")
+                sys.exit(1)
+        else:
+            # Download with retries (or fetch metadata only if --skip-pdfs)
+            downloader.download_papers(paper_ids, max_workers=args.max_workers, max_retries=3, skip_pdfs=args.skip_pdfs)
         
         # Generate manifest
         downloader.generate_manifest()
