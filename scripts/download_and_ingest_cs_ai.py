@@ -1,622 +1,511 @@
 #!/usr/bin/env python3
 """
-download_and_ingest_cs_ai.py
+download_and_ingest_cs_ai_v2.py
 
-Downloads all 6000 CS.AI papers from arXiv S3, extracts text, and generates 
-JSONL manifest for RAG ingestion.
-
-Features:
-- Parallel S3 downloads (8 concurrent) with retry logic
-- PDF text extraction using pdfplumber
-- Resumable downloads (skips existing files)
-- Progress tracking with ETA
-- Fallback to arXiv abstract if PDF extraction fails
-- Batch JSONL output for ingestion
+Production-ready arXiv paper downloader with:
+- Per-paper category tracking (not hardcoded)
+- Stream-write metadata (no memory bloat)
+- Proper arXiv ID parsing with version handling
+- Dynamic date filtering (current year/month aware)
+- Deduplication across categories
+- Robust PDF validation
 
 Usage:
-  python scripts/download_and_ingest_cs_ai.py --storage-path ./storage [--max-papers 100]
+  python scripts/download_and_ingest_cs_ai_v2.py --storage-path ./storage
 
 Requirements:
-  - AWS CLI configured for requester-pays access
-  - pip install requests pdfplumber tqdm
+  pip install requests pdfplumber tqdm
 
 Output:
   storage/
-    ├── cs-ai-pdfs/        # Downloaded PDFs
-    ├── cs-ai-papers.jsonl # Papers ready for ingestion
-    └── download_log.txt   # Download progress log
+    ├── cs-ai-pdfs/           # Downloaded PDFs
+    ├── cs-ai-papers.jsonl    # Ready for AI Search ingestion
+    ├── download.log          # Detailed logs
+    └── metadata.jsonl        # Per-paper metadata (intermediate)
 """
 
 import argparse
-import subprocess
 import json
-import sys
+import logging
 import os
 import re
+import sys
 import time
-import logging
+from datetime import datetime
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
-from urllib.parse import quote
+from threading import Lock
 import xml.etree.ElementTree as ET
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler('arxiv_download.log')
-    ]
-)
-logger = logging.getLogger(__name__)
 
 try:
     import requests
 except ImportError:
-    logger.error("requests library not found. Install with: pip install requests")
+    print("ERROR: requests not found. pip install requests", file=sys.stderr)
     sys.exit(1)
 
 try:
     import pdfplumber
 except ImportError:
-    logger.warning("pdfplumber not found. PDF text extraction will be skipped. Install with: pip install pdfplumber")
     pdfplumber = None
 
 try:
     from tqdm import tqdm
 except ImportError:
-    logger.warning("tqdm not found. Progress bars disabled. Install with: pip install tqdm")
     tqdm = None
 
-
-# ========================
-# Helpers
-# ========================
-
-def run_cmd(cmd, check=True):
-    """Run shell command and return result."""
-    p = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    if check and p.returncode != 0:
-        raise RuntimeError(f"Command failed: {cmd}\nSTDERR: {p.stderr}")
-    return p
+try:
+    import arxiv
+except ImportError:
+    print("ERROR: arxiv not found. pip install arxiv", file=sys.stderr)
+    sys.exit(1)
 
 
-def human_bytes(n):
-    """Convert bytes to human readable format."""
-    for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
-        if n < 1024.0:
-            return f"{n:3.2f} {unit}"
-        n /= 1024.0
-    return f"{n:.2f} PB"
-
-
-def is_valid_pdf(file_path, min_size=1024):
-    """Check if PDF is valid (not empty/corrupted)."""
-    try:
-        size = os.path.getsize(file_path)
-        # Reject suspiciously small files (error pages are ~1853 bytes)
-        if size < min_size:
-            return False
-        # Try to check PDF magic bytes, but don't fail if we can't read
+class ArxivDownloader:
+    """Production-grade arXiv downloader with proper metadata tracking."""
+    
+    def __init__(self, storage_path, log_file=None):
+        self.storage_path = Path(storage_path).resolve()
+        self.storage_path.mkdir(parents=True, exist_ok=True)
+        
+        self.pdf_dir = self.storage_path / "cs-ai-pdfs"
+        self.pdf_dir.mkdir(exist_ok=True)
+        
+        self.metadata_file = self.storage_path / "metadata.jsonl"
+        self.output_jsonl = self.storage_path / "cs-ai-papers.jsonl"
+        self.ids_file = self.storage_path / "cs_ai_ids.txt"
+        self.failed_file = self.storage_path / "failed_ids.txt"
+        
+        # Setup logging
+        log_path = log_file or (self.storage_path / "download.log")
+        self.logger = self._setup_logger(log_path)
+        
+        # Thread safety
+        self.metadata_lock = Lock()
+        self.id_lock = Lock()
+        
+        # Stats
+        self.stats = {"success": 0, "failed": 0, "skipped": 0}
+        
+    def _setup_logger(self, log_path):
+        logger = logging.getLogger("arxiv_downloader")
+        logger.setLevel(logging.INFO)
+        
+        # File handler
+        fh = logging.FileHandler(log_path)
+        fh.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+        logger.addHandler(fh)
+        
+        # Console handler
+        ch = logging.StreamHandler(sys.stdout)
+        ch.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+        logger.addHandler(ch)
+        
+        return logger
+    
+    def _normalize_arxiv_id(self, arxiv_id: str) -> str:
+        """Normalize arxiv ID: remove versions, handle old/new format."""
+        # Remove version suffix (v1, v2, etc.)
+        normalized = re.sub(r'v\d+$', '', arxiv_id).strip()
+        return normalized
+    
+    def _is_valid_pdf(self, file_path: Path, min_size: int = 5000) -> bool:
+        """Validate PDF is real (not error page, corrupted)."""
         try:
-            with open(file_path, 'rb') as f:
+            size = file_path.stat().st_size
+            if size < min_size:
+                return False
+            
+            with file_path.open('rb') as f:
                 header = f.read(4)
-                # Accept if it starts with %PDF or if it's reasonably sized
-                if header == b'%PDF':
-                    return True
-                # If we have >50KB, probably a real PDF even if headers are weird
-                if size > 50000:
-                    return True
-        except:
-            # If file exists and has reasonable size, accept it
-            if size > min_size:
-                return True
-        return False
-    except:
-        return False
-
-
-def download_pdf_direct(arxiv_id, dest_path, attempt=1, max_attempts=5):
-    """Download PDF directly from arXiv using HTTP with exponential backoff."""
-    # Construct URL (works for both old and new formats)
-    url = f"https://arxiv.org/pdf/{arxiv_id}.pdf"
-    
-    try:
-        # Use User-Agent to avoid blocking
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
-        
-        # allow_redirects=True follows 301/302 redirects automatically
-        response = requests.get(url, timeout=60, stream=True, allow_redirects=True, headers=headers)
-        if response.status_code == 200:
-            with open(dest_path, 'wb') as f:
-                f.write(response.content)
             
-            # Validate PDF
-            if is_valid_pdf(dest_path):
-                return True
-            else:
-                # PDF is corrupt/empty, delete it and retry
-                os.remove(dest_path)
-                if attempt < max_attempts:
-                    wait_time = 3 ** (attempt - 1)  # 1s, 3s, 9s, 27s
-                    time.sleep(wait_time)
-                    return download_pdf_direct(arxiv_id, dest_path, attempt + 1, max_attempts)
-                else:
-                    return False
-        elif response.status_code in [429, 500, 502, 503, 504]:
-            # Rate limit or server errors - retry with longer backoff
-            if attempt < max_attempts:
-                wait_time = 5 ** (attempt - 1)  # 1s, 5s, 25s, 125s
-                time.sleep(wait_time)
-                return download_pdf_direct(arxiv_id, dest_path, attempt + 1, max_attempts)
-            else:
-                return False
-        elif response.status_code == 404:
-            # Not found - don't retry
-            return False
-        else:
-            if attempt < max_attempts:
-                wait_time = 3 ** (attempt - 1)
-                time.sleep(wait_time)
-                return download_pdf_direct(arxiv_id, dest_path, attempt + 1, max_attempts)
-            else:
-                return False
-    except requests.Timeout:
-        if attempt < max_attempts:
-            wait_time = 3 ** (attempt - 1)
-            time.sleep(wait_time)
-            return download_pdf_direct(arxiv_id, dest_path, attempt + 1, max_attempts)
-        else:
-            return False
-    except Exception as e:
-        if attempt < max_attempts and not isinstance(e, (FileNotFoundError, PermissionError)):
-            wait_time = 3 ** (attempt - 1)
-            time.sleep(wait_time)
-            return download_pdf_direct(arxiv_id, dest_path, attempt + 1, max_attempts)
-        else:
-            return False
-    return False
-
-
-def extract_text_from_pdf(pdf_path, max_length=5000):
-    """Extract text from PDF using pdfplumber."""
-    if pdfplumber is None:
-        return None
-    
-    try:
-        text_parts = []
-        with pdfplumber.open(pdf_path) as pdf:
-            # Extract from first 3 pages (usually abstract + intro)
-            for page_idx, page in enumerate(pdf.pages[:3]):
-                text = page.extract_text()
-                if text:
-                    text_parts.append(text)
-        
-        full_text = "\n".join(text_parts)
-        # Clean up and limit length
-        full_text = " ".join(full_text.split())[:max_length]
-        return full_text if full_text.strip() else None
-    except Exception as e:
-        return None
-
-
-def fetch_paper_metadata_from_arxiv(arxiv_id):
-    """Fetch paper metadata from arXiv API."""
-    try:
-        url = f"http://export.arxiv.org/api/query?id_list={arxiv_id}"
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        
-        root = ET.fromstring(response.content)
-        entry = root.find('.//{http://www.w3.org/2005/Atom}entry')
-        
-        if entry is None:
-            return None
-        
-        # Extract fields
-        title_elem = entry.find('{http://www.w3.org/2005/Atom}title')
-        summary_elem = entry.find('{http://www.w3.org/2005/Atom}summary')
-        published_elem = entry.find('{http://www.w3.org/2005/Atom}published')
-        
-        title = (title_elem.text or "").replace("\n", " ").strip() if title_elem is not None else "Unknown"
-        abstract = (summary_elem.text or "").replace("\n", " ").strip() if summary_elem is not None else ""
-        published = (published_elem.text or "").split("T")[0] if published_elem is not None else ""
-        
-        # Extract authors
-        authors = []
-        for author in entry.findall('{http://www.w3.org/2005/Atom}author'):
-            name_elem = author.find('{http://www.w3.org/2005/Atom}name')
-            if name_elem is not None:
-                authors.append(name_elem.text)
-        
-        return {
-            "title": title,
-            "abstract": abstract,
-            "authors": authors if authors else ["Unknown"],
-            "published": published
-        }
-    except Exception as e:
-        return None
-
-
-def download_paper(arxiv_id, pdf_dir, max_retries=3):
-    """Download a single paper and extract metadata."""
-    # Normalize filename (replace / and . with -)
-    # cs/9308101 -> cs-9308101.pdf
-    # 1706.03762 -> 1706-03762.pdf
-    safe_filename = arxiv_id.replace('/', '-').replace('.', '-')
-    pdf_path = pdf_dir / f"{safe_filename}.pdf"
-    
-    # Skip if already exists
-    if pdf_path.exists():
-        return {"status": "skipped", "arxiv_id": arxiv_id}
-    
-    # Download from arXiv using HTTP (with exponential backoff)
-    if not download_pdf_direct(arxiv_id, str(pdf_path), attempt=1, max_attempts=5):
-        return {"status": "failed", "arxiv_id": arxiv_id, "error": "PDF download failed"}
-    
-    # Extract text from PDF
-    text = extract_text_from_pdf(str(pdf_path))
-    
-    # Fetch metadata from arXiv API (with fallback)
-    metadata = fetch_paper_metadata_from_arxiv(arxiv_id)
-    if not metadata:
-        # Fallback: create minimal metadata from arxiv_id
-        # Better to have paper with minimal metadata than to skip it
-        metadata = {
-            "title": f"arXiv paper {arxiv_id}",
-            "abstract": text[:500] if text else f"Paper {arxiv_id}",
-            "authors": ["Unknown"],
-            "published": "2025-01-01"
-        }
-    
-    return {
-        "status": "success",
-        "arxiv_id": arxiv_id,
-        "title": metadata["title"],
-        "abstract": metadata["abstract"],
-        "authors": metadata["authors"],
-        "published": metadata["published"],
-        "extracted_text": text,
-        "pdf_url": f"https://arxiv.org/pdf/{arxiv_id}.pdf"
-    }
-
-
-# ========================
-# Main Workflow
-# ========================
-
-def main(storage_path: Path, max_papers=None, min_date="2019-01-01", categories="cs.AI,cs.LG,cs.CL"):
-    """Main download and ingestion workflow."""
-    storage_path = storage_path.resolve()
-    storage_path.mkdir(parents=True, exist_ok=True)
-    
-    # Parse categories
-    cat_list = [c.strip() for c in categories.split(',')]
-    logger.info(f"Fetching categories: {', '.join(cat_list)}")
-    logger.info(f"Filtering papers from {min_date} onwards")
-    
-    pdf_dir = storage_path / "cs-ai-pdfs"
-    pdf_dir.mkdir(exist_ok=True)
-    
-    output_jsonl = storage_path / "cs-ai-papers.jsonl"
-    log_file = storage_path / "download_log.txt"
-    
-    logger.info("="*70)
-    logger.info("CS.AI Paper Bulk Download & Ingestion")
-    logger.info("="*70)
-    logger.info(f"Storage path: {storage_path}")
-    logger.info(f"PDF directory: {pdf_dir}")
-    logger.info(f"Output JSONL: {output_jsonl}")
-    
-    # Step 1: Load paper IDs
-    logger.info("[Step 1] Loading CS.AI paper IDs...")
-    
-    # Determine max papers to fetch (default: ALL available)
-    # Query arXiv to get total count if not specified
-    if max_papers:
-        effective_max = max_papers
-    else:
-        try:
-            base_url = "http://export.arxiv.org/api/query"
-            params = {
-                'search_query': 'cat:cs.AI',
-                'start': 0,
-                'max_results': 1,
-            }
-            response = requests.get(base_url, params=params, timeout=30)
-            root = ET.fromstring(response.content)
-            total_elem = root.find('.//{http://a9.com/-/spec/opensearch/1.1/}totalResults')
-            if total_elem is not None:
-                effective_max = int(total_elem.text)
-                logger.info(f"Total CS.AI papers available: {effective_max:,}")
-            else:
-                effective_max = 6000
+            # Must start with %PDF
+            return header == b'%PDF'
         except Exception as e:
-            logger.warning(f"Could not get total count, defaulting to 6000: {e}")
-            effective_max = 6000
+            self.logger.debug(f"PDF validation error for {file_path}: {e}")
+            return False
     
-    # Check if we have cs_ai_ids.txt from previous run
-    cs_ai_ids_file = storage_path / "cs_ai_ids.txt"
-    ids_checkpoint_file = storage_path / "ids_checkpoint.txt"  # Track last successful batch
-    
-    if not cs_ai_ids_file.exists():
-        logger.info(f"Fetching papers from arXiv API ({effective_max:,} total)...")
-        base_url = "http://export.arxiv.org/api/query"
-        paper_ids = set()  # Use set for automatic deduplication
-        start = 0
-        batch_size = 2000
-        last_checkpoint = 0
+    def _extract_text(self, pdf_path: Path, max_chars: int = 5000) -> str:
+        """Extract text from first 3 pages of PDF."""
+        if pdfplumber is None:
+            return ""
         
-        # Check for checkpoint
-        if ids_checkpoint_file.exists():
-            try:
-                with open(ids_checkpoint_file) as f:
-                    last_checkpoint = int(f.read().strip())
-                    start = last_checkpoint
-                    logger.info(f"Resuming from batch starting at {start}...")
-            except:
-                pass
-        
-        # Load any previously fetched IDs
-        if cs_ai_ids_file.exists():
-            with open(cs_ai_ids_file) as f:
-                paper_ids = set(line.strip() for line in f if line.strip())
-        
-        while len(paper_ids) < effective_max:
-            batch_num = (start // batch_size) + 1
-            logger.info(f"Fetching batch {batch_num} (papers {start}-{start + batch_size})...")
-            
-            # Build query for all categories with date filter
-            # Format: (cat:cs.AI OR cat:cs.LG) AND submittedDate:[202502010000 TO 202512312359]
-            cat_query = " OR ".join([f"cat:{cat}" for cat in cat_list])
-            
-            # Convert min_date to arXiv timestamp format (YYYYMMDDHHMM)
-            min_date_parts = min_date.split('-')
-            min_timestamp = f"{min_date_parts[0]}{min_date_parts[1]}{min_date_parts[2]}0000"
-            
-            # Full query with date filter
-            full_query = f"({cat_query}) AND submittedDate:[{min_timestamp} TO 202512312359]"
-            
-            params = {
-                'search_query': full_query,
-                'start': start,
-                'max_results': min(batch_size, effective_max - len(paper_ids)),
-                'sortBy': 'submittedDate',
-                'sortOrder': 'ascending'
-            }
-            
-            try:
-                response = requests.get(base_url, params=params, timeout=60)
-                response.raise_for_status()
-            except requests.RequestException as e:
-                logger.error(f"ERROR fetching from API: {e}")
-                logger.info(f"Checkpoint: {start} papers")
-                break
-            
-            try:
-                root = ET.fromstring(response.content)
-            except ET.ParseError as e:
-                logger.error(f"ERROR parsing XML: {e}")
-                logger.info(f"Checkpoint: {start} papers")
-                break
-            
-            found_count = 0
-            
-            for entry in root.findall('.//{http://www.w3.org/2005/Atom}entry'):
-                if len(paper_ids) >= effective_max:
-                    break
-                id_elem = entry.find('{http://www.w3.org/2005/Atom}id')
-                if id_elem is not None:
-                    arxiv_id = id_elem.text.split('/abs/')[-1]
-                    arxiv_id_base = re.sub(r'v\d+$', '', arxiv_id)
-                    
-                    # Skip if already fetched
-                    if arxiv_id_base in paper_ids:
-                        continue
-                    
-                    # Accept all new-format IDs (YYMM.NNNNN)
-                    # arXiv API with date filter will handle date filtering
-                    if '.' in arxiv_id_base and '/' not in arxiv_id_base:
-                        paper_ids.add(arxiv_id_base)
-                        found_count += 1
-            
-            if found_count == 0:
-                logger.info(f"No more papers found. Total: {len(paper_ids):,}")
-                break
-            
-            # Save checkpoint and IDs after each batch
-            with open(ids_checkpoint_file, "w") as f:
-                f.write(str(start + batch_size))
-            with open(cs_ai_ids_file, "w") as f:
-                for pid in paper_ids:
-                    f.write(pid + "\n")
-            
-            logger.info(f"Fetched {len(paper_ids):,} papers so far")
-            start += batch_size
-            time.sleep(2)  # Rate limiting
-        
-        # Remove checkpoint after successful completion
         try:
-            os.remove(ids_checkpoint_file)
-        except:
-            pass
-        
-        # Convert set to sorted list and save
-        paper_ids = sorted(list(paper_ids))
-        with open(cs_ai_ids_file, "w") as f:
-            for pid in paper_ids:
-                f.write(pid + "\n")
-    else:
-        # Load from existing file
-        with open(cs_ai_ids_file, "r") as f:
-            all_ids = [line.strip() for line in f if line.strip()]
-        paper_ids = all_ids if not max_papers else all_ids[:max_papers]
-        logger.info(f"Loaded {len(paper_ids):,} papers from cache")
-    
-    # Save metadata about the fetch
-    metadata_file = storage_path / "fetch_metadata.txt"
-    with open(metadata_file, "w") as f:
-        f.write(f"Categories fetched: {', '.join(cat_list)}\n")
-        f.write(f"Minimum date: {min_date}\n")
-        f.write(f"Total papers: {len(paper_ids):,}\n")
-        f.write(f"Latest version only (v suffixes removed): Yes\n")
-    
-    logger.info(f"Total papers to download: {len(paper_ids):,}")
-    
-    # Step 2: Parallel download
-    logger.info(f"[Step 2] Downloading {len(paper_ids):,} PDFs (parallel)...")
-    results = {"success": 0, "failed": 0, "skipped": 0}
-    all_papers = []
-    failed_ids = []
-    
-    with ThreadPoolExecutor(max_workers=8) as executor:
-        futures = {executor.submit(download_paper, pid, pdf_dir): pid for pid in paper_ids}
-        
-        # Progress bar
-        if tqdm:
-            progress_iterator = tqdm(as_completed(futures), total=len(futures), desc="Downloading")
-        else:
-            progress_iterator = as_completed(futures)
-        
-        for future in progress_iterator:
-            try:
-                result = future.result()
-                status = result.get("status")
-                results[status] += 1
-                
-                if status == "success":
-                    all_papers.append(result)
-                elif status == "failed":
-                    failed_ids.append(result.get("arxiv_id"))
-                
-                # Log to file
-                with open(log_file, "a") as f:
-                    f.write(json.dumps(result) + "\n")
-            except Exception as e:
-                logger.error(f"Future execution error: {e}")
-                results["failed"] += 1
-    
-    logger.info(f"✓ Success: {results['success']:,}")
-    logger.info(f"✗ Failed: {results['failed']:,}")
-    logger.info(f"⊘ Skipped: {results['skipped']:,}")
-    
-    # Save failed IDs for reference
-    if failed_ids:
-        failed_file = storage_path / "failed_ids.txt"
-        with open(failed_file, "w") as f:
-            for fid in failed_ids:
-                f.write(fid + "\n")
-        logger.info(f"Failed IDs saved to: {failed_file}")
-    
-    # Step 3: Write JSONL - regenerate for ALL downloaded PDFs
-    logger.info("[Step 3] Writing JSONL manifest for all downloaded PDFs...")
-    
-    # Get all downloaded PDF files and validate
-    all_pdfs = list(pdf_dir.glob("*.pdf"))
-    pdf_files = [pdf for pdf in all_pdfs if is_valid_pdf(pdf)]
-    invalid_pdfs = len(all_pdfs) - len(pdf_files)
-    
-    logger.info(f"Found {len(all_pdfs)} PDF files, {len(pdf_files)} valid, {invalid_pdfs} corrupt/empty")
-    
-    # Remove invalid PDFs
-    if invalid_pdfs > 0:
-        logger.info(f"Removing {invalid_pdfs} invalid PDFs...")
-        for pdf in all_pdfs:
-            if not is_valid_pdf(pdf):
-                try:
-                    os.remove(pdf)
-                except:
-                    pass
-    
-    ingested_count = 0
-    with open(output_jsonl, "w") as f:
-        for pdf_file in pdf_files:
-            # Reconstruct arxiv_id from filename (reverse normalization)
-            # cs-9308101.pdf -> cs/9308101
-            # 1706-03762.pdf -> 1706.03762
-            filename = pdf_file.stem
+            parts = []
+            with pdfplumber.open(str(pdf_path)) as pdf:
+                for page in pdf.pages[:3]:
+                    text = page.extract_text()
+                    if text:
+                        parts.append(text)
             
-            # Check if it's old format (contains letters) or new format (all digits/dashes)
-            if any(c.isalpha() for c in filename):
-                # Old format: cs-9308101 -> cs/9308101
-                arxiv_id = filename.replace('-', '/')
-            else:
-                # New format: 1706-03762 -> 1706.03762
-                arxiv_id = filename.replace('-', '.', 1)  # Replace first dash only
+            full = " ".join(parts)
+            full = " ".join(full.split())[:max_chars]
+            return full if full.strip() else ""
+        except Exception as e:
+            self.logger.debug(f"Text extraction error for {pdf_path}: {e}")
+            return ""
+    
+    def _fetch_metadata(self, arxiv_id: str) -> dict:
+        """Fetch paper metadata from arXiv API."""
+        try:
+            url = f"https://export.arxiv.org/api/query?id_list={arxiv_id}"
+            resp = requests.get(url, timeout=10)
+            resp.raise_for_status()
             
-            # Try to get metadata from log first
-            paper_metadata = None
-            for paper in all_papers:
-                if paper["arxiv_id"] == arxiv_id:
-                    paper_metadata = paper
-                    break
+            root = ET.fromstring(resp.content)
+            entry = root.find('.//{http://www.w3.org/2005/Atom}entry')
+            if entry is None:
+                return None
             
-            # If not in log, create minimal metadata
-            if not paper_metadata:
-                text = extract_text_from_pdf(str(pdf_file))
-                paper_metadata = {
-                    "arxiv_id": arxiv_id,
-                    "title": f"arXiv {arxiv_id}",
-                    "abstract": text[:500] if text else f"Paper {arxiv_id}",
-                    "authors": ["Unknown"],
-                    "published": "2024-01-01",
-                    "extracted_text": text,
-                    "pdf_url": f"https://arxiv.org/pdf/{arxiv_id}.pdf"
-                }
+            title_el = entry.find('{http://www.w3.org/2005/Atom}title')
+            summary_el = entry.find('{http://www.w3.org/2005/Atom}summary')
+            published_el = entry.find('{http://www.w3.org/2005/Atom}published')
             
-            # Write to JSONL
-            ingestion_doc = {
-                "id": arxiv_id,
-                "title": paper_metadata.get("title", f"arXiv {arxiv_id}"),
-                "abstract": paper_metadata.get("abstract", ""),
-                "authors": paper_metadata.get("authors", ["Unknown"]),
-                "published": paper_metadata.get("published", "2024-01-01"),
-                "category": "cs.AI",
-                "arxiv_id": arxiv_id,
-                "pdf_url": paper_metadata.get("pdf_url", f"https://arxiv.org/pdf/{arxiv_id}.pdf"),
-                "full_text": paper_metadata.get("extracted_text") or paper_metadata.get("abstract", "")
+            title = (title_el.text or "").replace("\n", " ").strip() if title_el is not None else "Unknown"
+            abstract = (summary_el.text or "").replace("\n", " ").strip() if summary_el is not None else ""
+            published = (published_el.text or "").split("T")[0] if published_el is not None else ""
+            
+            authors = []
+            for author_el in entry.findall('{http://www.w3.org/2005/Atom}author'):
+                name_el = author_el.find('{http://www.w3.org/2005/Atom}name')
+                if name_el is not None and name_el.text:
+                    authors.append(name_el.text)
+            
+            categories = []
+            for cat_el in entry.findall('{http://www.w3.org/2005/Atom}category'):
+                term = cat_el.attrib.get('term')
+                if term:
+                    categories.append(term)
+            
+            return {
+                "title": title,
+                "abstract": abstract,
+                "authors": authors or ["Unknown"],
+                "published": published,
+                "categories": categories
             }
-            f.write(json.dumps(ingestion_doc) + "\n")
-            ingested_count += 1
+        except Exception as e:
+            self.logger.debug(f"Metadata fetch failed for {arxiv_id}: {e}")
+            return None
     
-    logger.info(f"✓ Wrote {ingested_count} papers to {output_jsonl}")
+    def _download_pdf(self, arxiv_id: str, dest_path: Path, attempt: int = 1, max_attempts: int = 5) -> bool:
+        """Download PDF with retry logic."""
+        url = f"https://arxiv.org/pdf/{arxiv_id}.pdf"
+        headers = {'User-Agent': 'Mozilla/5.0 (compatible; ArxivDownloader/1.0)'}
+        
+        try:
+            resp = requests.get(url, timeout=60, stream=True, headers=headers, allow_redirects=True)
+            
+            if resp.status_code == 200:
+                # Stream to temp file first
+                tmp_path = dest_path.with_suffix(dest_path.suffix + ".part")
+                try:
+                    with tmp_path.open('wb') as f:
+                        for chunk in resp.iter_content(chunk_size=8192):
+                            if chunk:
+                                f.write(chunk)
+                    
+                    # Validate before moving
+                    if self._is_valid_pdf(tmp_path):
+                        os.replace(tmp_path, dest_path)
+                        return True
+                    else:
+                        tmp_path.unlink(missing_ok=True)
+                        if attempt < max_attempts:
+                            time.sleep(min(2 ** attempt, 30))
+                            return self._download_pdf(arxiv_id, dest_path, attempt + 1, max_attempts)
+                        return False
+                finally:
+                    tmp_path.unlink(missing_ok=True)
+            
+            elif resp.status_code in (429, 500, 502, 503, 504):
+                if attempt < max_attempts:
+                    wait = min(2 ** attempt, 60)
+                    time.sleep(wait)
+                    return self._download_pdf(arxiv_id, dest_path, attempt + 1, max_attempts)
+                return False
+            
+            elif resp.status_code == 404:
+                return False
+            
+            else:
+                if attempt < max_attempts:
+                    time.sleep(min(2 ** attempt, 30))
+                    return self._download_pdf(arxiv_id, dest_path, attempt + 1, max_attempts)
+                return False
+        
+        except requests.Timeout:
+            if attempt < max_attempts:
+                time.sleep(min(2 ** attempt, 30))
+                return self._download_pdf(arxiv_id, dest_path, attempt + 1, max_attempts)
+            return False
+        except Exception as e:
+            self.logger.debug(f"Download error for {arxiv_id}: {e}")
+            if attempt < max_attempts:
+                time.sleep(min(2 ** attempt, 30))
+                return self._download_pdf(arxiv_id, dest_path, attempt + 1, max_attempts)
+            return False
     
-    # Step 4: Summary
-    logger.info("[Step 4] Summary")
-    logger.info("="*70)
-    total_size = sum(f.stat().st_size for f in pdf_dir.glob("*.pdf"))
-    logger.info(f"Papers downloaded: {results['success']}")
-    logger.info(f"Total PDF size: {human_bytes(total_size)}")
-    logger.info(f"JSONL file: {output_jsonl}")
-    logger.info("Next step: Deploy and trigger bulk ingestion via Workers")
-    logger.info("="*70)
+    def _safe_filename(self, arxiv_id: str) -> str:
+        """Convert arxiv ID to safe filename."""
+        # Replace slashes with dash for old format
+        return arxiv_id.replace('/', '-').replace('.', '-')
+    
+    def _download_worker(self, arxiv_id: str) -> dict:
+        """Download single paper and extract metadata."""
+        arxiv_id_norm = self._normalize_arxiv_id(arxiv_id)
+        safe_name = self._safe_filename(arxiv_id_norm)
+        pdf_path = self.pdf_dir / f"{safe_name}.pdf"
+        
+        # Skip if exists
+        if pdf_path.exists() and self._is_valid_pdf(pdf_path):
+            return {"status": "skipped", "arxiv_id": arxiv_id_norm}
+        
+        # Download PDF
+        if not self._download_pdf(arxiv_id_norm, pdf_path):
+            return {"status": "failed", "arxiv_id": arxiv_id_norm}
+        
+        # Extract text
+        text = self._extract_text(pdf_path)
+        
+        # Fetch metadata from API
+        metadata = self._fetch_metadata(arxiv_id_norm)
+        if not metadata:
+            metadata = {
+                "title": f"arXiv {arxiv_id_norm}",
+                "abstract": text[:500] if text else "",
+                "authors": ["Unknown"],
+                "published": "",
+                "categories": []
+            }
+        
+        record = {
+            "status": "success",
+            "arxiv_id": arxiv_id_norm,
+            "title": metadata["title"],
+            "abstract": metadata["abstract"],
+            "authors": metadata["authors"],
+            "published": metadata["published"],
+            "categories": metadata["categories"],  # KEY: per-paper categories
+            "extracted_text": text,
+            "pdf_url": f"https://arxiv.org/pdf/{arxiv_id_norm}.pdf"
+        }
+        
+        # STREAM WRITE: append metadata immediately (no memory bloat)
+        with self.metadata_lock:
+            with self.metadata_file.open('a') as f:
+                f.write(json.dumps(record) + "\n")
+        
+        return record
+    
+    def fetch_paper_ids(self, categories: str, min_date: str) -> list:
+        """Fetch all paper IDs from arXiv using arxiv.py library.
+        
+        Uses arxiv.py for automatic pagination, 3-second delays (arXiv ToU), 
+        and proper error handling. Handles 452k+ papers efficiently.
+        """
+        cat_list = [c.strip() for c in categories.split(',')]
+        self.logger.info(f"Fetching papers from: {', '.join(cat_list)}")
+        self.logger.info(f"Minimum date: {min_date}")
+        
+        # Check cache
+        if self.ids_file.exists():
+            with self.ids_file.open('r') as f:
+                ids = [line.strip() for line in f if line.strip()]
+            self.logger.info(f"Loaded {len(ids)} IDs from cache")
+            return ids
+        
+        # Create arxiv client with mandatory 3-second delay (arXiv ToU requirement)
+        client = arxiv.Client(
+            page_size=2000,        # Max per request (arXiv API limit)
+            delay_seconds=3.0,     # MANDATORY 3-second delay per arXiv Terms of Use
+            num_retries=3
+        )
+        
+        # Parse dates for date range
+        min_parts = min_date.split('-')
+        min_ts = f"{min_parts[0]}{min_parts[1]}{min_parts[2]}0000"
+        
+        # Dynamic upper bound (current date)
+        now = datetime.now(datetime.timezone.utc)
+        max_ts = now.strftime('%Y%m%d2359')
+        
+        # Build query with categories and date range
+        cat_query = " OR ".join([f"cat:{c}" for c in cat_list])
+        full_query = f"({cat_query}) AND submittedDate:[{min_ts} TO {max_ts}]"
+        
+        self.logger.info(f"Query: {full_query}")
+        self.logger.info(f"Using arxiv.py with 3-second delays (arXiv ToU compliant)")
+        
+        # Create search with unlimited results
+        search = arxiv.Search(
+            query=full_query,
+            max_results=float('inf'),  # Fetch ALL available results
+            sort_by=arxiv.SortCriterion.SubmittedDate
+        )
+        
+        # Fetch using generator (handles pagination automatically)
+        paper_ids = set()
+        count = 0
+        
+        try:
+            for result in client.results(search):
+                arxiv_id = result.get_short_id()
+                arxiv_id_norm = self._normalize_arxiv_id(arxiv_id)
+                
+                # Deduplicate across categories
+                if arxiv_id_norm not in paper_ids:
+                    paper_ids.add(arxiv_id_norm)
+                    count += 1
+                    
+                    # Log progress every 1000 papers
+                    if count % 1000 == 0:
+                        self.logger.info(f"  Collected {count} unique papers so far")
+            
+            self.logger.info(f"Finished fetching. Total unique papers: {len(paper_ids)}")
+        
+        except arxiv.UnexpectedEmptyPageError:
+            # Normal end of results - arxiv.py raises this when all results are exhausted
+            self.logger.info(f"Finished fetching (end of results). Total unique papers: {len(paper_ids)}")
+        except Exception as e:
+            self.logger.error(f"API fetch failed: {e}")
+            self.logger.error(f"Partial results: {len(paper_ids)} papers collected before error")
+        
+        # Save IDs
+        ids_list = sorted(list(paper_ids))
+        with self.ids_file.open('w') as f:
+            for pid in ids_list:
+                f.write(pid + "\n")
+        
+        return ids_list
+    
+    def download_papers(self, paper_ids: list, max_workers: int = 8, max_retries: int = 3):
+        """Download all papers with retry logic."""
+        self.logger.info(f"Downloading {len(paper_ids)} papers...")
+        
+        to_retry = paper_ids.copy()
+        
+        for retry_attempt in range(1, max_retries + 1):
+            if not to_retry:
+                break
+            
+            self.logger.info(f"Pass {retry_attempt}/{max_retries}: {len(to_retry)} papers")
+            failed_this_pass = []
+            
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = {executor.submit(self._download_worker, pid): pid for pid in to_retry}
+                
+                iterator = tqdm(as_completed(futures), total=len(futures), desc=f"Download P{retry_attempt}") if tqdm else as_completed(futures)
+                
+                for future in iterator:
+                    try:
+                        result = future.result()
+                        status = result["status"]
+                        
+                        if status == "success":
+                            self.stats["success"] += 1
+                        elif status == "failed":
+                            failed_this_pass.append(result["arxiv_id"])
+                        else:
+                            self.stats["skipped"] += 1
+                    except Exception as e:
+                        self.logger.error(f"Worker error: {e}")
+                        failed_this_pass.append(futures[future])
+            
+            to_retry = failed_this_pass
+        
+        # Final failures
+        if to_retry:
+            with self.failed_file.open('w') as f:
+                for fid in to_retry:
+                    f.write(fid + "\n")
+            self.logger.info(f"Failed IDs saved to {self.failed_file}")
+        
+        self.logger.info(f"✓ Success: {self.stats['success']}")
+        self.logger.info(f"✗ Failed: {len(to_retry)}")
+        self.logger.info(f"⊘ Skipped: {self.stats['skipped']}")
+    
+    def generate_manifest(self):
+        """Generate final JSONL from metadata (with real categories per paper)."""
+        self.logger.info("Generating manifest...")
+        
+        # Load metadata
+        records = {}
+        if self.metadata_file.exists():
+            with self.metadata_file.open('r') as f:
+                for line in f:
+                    try:
+                        obj = json.loads(line)
+                        aid = obj.get("arxiv_id")
+                        if aid:
+                            records[aid] = obj
+                    except json.JSONDecodeError:
+                        pass
+        
+        # Write output JSONL
+        count = 0
+        with self.output_jsonl.open('w') as out:
+            for arxiv_id, record in records.items():
+                if record["status"] != "success":
+                    continue
+                
+                # Use actual category from metadata (first one, or default)
+                category = record["categories"][0] if record.get("categories") else "cs.AI"
+                
+                ingestion_doc = {
+                    "id": arxiv_id,
+                    "arxiv_id": arxiv_id,
+                    "title": record["title"],
+                    "abstract": record["abstract"],
+                    "authors": record["authors"],
+                    "published": record["published"],
+                    "category": category,  # REAL category, not hardcoded
+                    "pdf_url": record["pdf_url"],
+                    "full_text": record["extracted_text"] or record["abstract"]
+                }
+                
+                out.write(json.dumps(ingestion_doc) + "\n")
+                count += 1
+        
+        self.logger.info(f"Wrote {count} papers to {self.output_jsonl}")
+        
+        # Summary
+        total_size = sum(p.stat().st_size for p in self.pdf_dir.glob("*.pdf"))
+        self.logger.info(f"Total PDF size: {total_size / (1024**3):.2f} GB")
 
 
-# ========================
-# CLI
-# ========================
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Download CS.AI papers and generate JSONL for RAG ingestion"
-    )
-    parser.add_argument("--storage-path", required=True, help="Storage directory path")
-    parser.add_argument("--max-papers", type=int, default=None, help="Max papers to download (for testing)")
-    parser.add_argument("--min-date", type=str, default="2019-01-01", help="Only download papers from this date onward (format: YYYY-MM-DD, default: 2019-01-01)")
-    parser.add_argument("--categories", type=str, default="cs.AI,cs.CV,cs.NE,cs.CL,cs.LG", help="Comma-separated arXiv categories to fetch (default: cs.AI,cs.CV,cs.NE,cs.CL,cs.LG)")
+def main():
+    parser = argparse.ArgumentParser(description="Production-grade arXiv downloader")
+    parser.add_argument("--storage-path", required=True, help="Storage directory")
+    parser.add_argument("--categories", default="cs.AI,cs.CV,cs.NE,cs.CL,cs.LG", help="Categories to fetch")
+    parser.add_argument("--min-date", default="2017-02-27", help="Minimum date (YYYY-MM-DD)")
+    parser.add_argument("--max-papers", type=int, default=None, help="Max papers (for testing)")
+    parser.add_argument("--max-workers", type=int, default=8, help="Parallel workers")
     
     args = parser.parse_args()
     
+    downloader = ArxivDownloader(args.storage_path)
+    
     try:
-        main(Path(args.storage_path), max_papers=args.max_papers, min_date=args.min_date, categories=args.categories)
+        # Fetch IDs
+        paper_ids = downloader.fetch_paper_ids(args.categories, args.min_date)
+        if args.max_papers:
+            paper_ids = paper_ids[:args.max_papers]
+        
+        # Download with retries
+        downloader.download_papers(paper_ids, max_workers=args.max_workers, max_retries=3)
+        
+        # Generate manifest
+        downloader.generate_manifest()
+        
+        downloader.logger.info("✅ Complete!")
+    
     except KeyboardInterrupt:
-        logger.info("Interrupted by user. Download can be resumed.")
+        downloader.logger.info("Interrupted by user")
         sys.exit(0)
     except Exception as e:
-        logger.exception(f"ERROR: {e}")
+        downloader.logger.exception(f"Fatal error: {e}")
         sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
