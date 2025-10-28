@@ -295,10 +295,11 @@ class ArxivDownloader:
         return record
     
     def fetch_paper_ids(self, categories: str, min_date: str) -> list:
-        """Fetch all paper IDs from arXiv using arxiv.py library.
+        """Fetch all paper IDs from arXiv using arxiv.py library with monthly date chunking.
         
         Uses arxiv.py for automatic pagination, 3-second delays (arXiv ToU), 
-        and proper error handling. Handles 452k+ papers efficiently.
+        and proper error handling. Splits large date ranges into monthly chunks
+        to work around arXiv API pagination limits with complex queries.
         """
         cat_list = [c.strip() for c in categories.split(',')]
         self.logger.info(f"Fetching papers from: {', '.join(cat_list)}")
@@ -318,56 +319,63 @@ class ArxivDownloader:
             num_retries=3
         )
         
-        # Parse dates for date range
+        # Parse dates
+        from dateutil.relativedelta import relativedelta
+        
         min_parts = min_date.split('-')
-        min_ts = f"{min_parts[0]}{min_parts[1]}{min_parts[2]}0000"
+        start_date = datetime(int(min_parts[0]), int(min_parts[1]), int(min_parts[2]), tzinfo=timezone.utc)
+        end_date = datetime.now(timezone.utc).replace(hour=23, minute=59, second=59)
         
-        # Dynamic upper bound (current date)
-        now = datetime.now(timezone.utc)
-        max_ts = now.strftime('%Y%m%d2359')
+        # Split into monthly chunks to work around API pagination limits
+        self.logger.info(f"Splitting into monthly chunks for reliable pagination...")
         
-        # Build query with categories and date range
         cat_query = " OR ".join([f"cat:{c}" for c in cat_list])
-        full_query = f"({cat_query}) AND submittedDate:[{min_ts} TO {max_ts}]"
-        
-        self.logger.info(f"Query: {full_query}")
-        self.logger.info(f"Using arxiv.py with 3-second delays (arXiv ToU compliant)")
-        
-        # Create search with unlimited results
-        # Note: Use SortOrder.Ascending with SubmittedDate to paginate through large result sets
-        search = arxiv.Search(
-            query=full_query,
-            max_results=float('inf'),  # Fetch ALL available results
-            sort_by=arxiv.SortCriterion.SubmittedDate,
-            sort_order=arxiv.SortOrder.Ascending  # CRITICAL: Ascending enables pagination for large sets
-        )
-        
-        # Fetch using generator (handles pagination automatically)
         paper_ids = set()
-        count = 0
+        total_count = 0
         
-        try:
-            for result in client.results(search):
-                arxiv_id = result.get_short_id()
-                arxiv_id_norm = self._normalize_arxiv_id(arxiv_id)
-                
-                # Deduplicate across categories
-                if arxiv_id_norm not in paper_ids:
-                    paper_ids.add(arxiv_id_norm)
-                    count += 1
-                    
-                    # Log progress every 1000 papers
-                    if count % 1000 == 0:
-                        self.logger.info(f"  Collected {count} unique papers so far")
+        current_date = start_date
+        month_count = 0
+        while current_date < end_date:
+            month_count += 1
+            next_date = min(current_date + relativedelta(months=1), end_date)
             
-            self.logger.info(f"Finished fetching. Total unique papers: {len(paper_ids)}")
+            min_ts = current_date.strftime('%Y%m%d0000')
+            max_ts = next_date.strftime('%Y%m%d2359')
+            
+            monthly_query = f"({cat_query}) AND submittedDate:[{min_ts} TO {max_ts}]"
+            
+            self.logger.info(f"Month {month_count}: Fetching {min_ts} to {max_ts}...")
+            
+            search = arxiv.Search(
+                query=monthly_query,
+                max_results=float('inf'),
+                sort_by=arxiv.SortCriterion.SubmittedDate,
+                sort_order=arxiv.SortOrder.Ascending
+            )
+            
+            month_count_papers = 0
+            try:
+                for result in client.results(search):
+                    arxiv_id = result.get_short_id()
+                    arxiv_id_norm = self._normalize_arxiv_id(arxiv_id)
+                    
+                    if arxiv_id_norm not in paper_ids:
+                        paper_ids.add(arxiv_id_norm)
+                        month_count_papers += 1
+                        total_count += 1
+                        
+                        if total_count % 1000 == 0:
+                            self.logger.info(f"  Total collected: {total_count} unique papers")
+            
+            except arxiv.UnexpectedEmptyPageError:
+                pass
+            except Exception as e:
+                self.logger.warning(f"Error fetching month {month_count}: {e}")
+            
+            self.logger.info(f"  Month {month_count}: {month_count_papers} papers (running total: {total_count})")
+            current_date = next_date
         
-        except arxiv.UnexpectedEmptyPageError:
-            # Normal end of results - arxiv.py raises this when all results are exhausted
-            self.logger.info(f"Finished fetching (end of results). Total unique papers: {len(paper_ids)}")
-        except Exception as e:
-            self.logger.error(f"API fetch failed: {e}")
-            self.logger.error(f"Partial results: {len(paper_ids)} papers collected before error")
+        self.logger.info(f"Finished fetching. Total unique papers: {len(paper_ids)}")
         
         # Save IDs
         ids_list = sorted(list(paper_ids))
