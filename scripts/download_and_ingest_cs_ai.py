@@ -491,16 +491,29 @@ def main():
     parser.add_argument("--max-papers", type=int, default=None, help="Max papers (for testing)")
     parser.add_argument("--max-workers", type=int, default=8, help="Parallel workers")
     parser.add_argument("--skip-pdfs", action="store_true", help="Skip PDF downloads, use abstracts only")
+    parser.add_argument("--skip-fetch", action="store_true", help="Skip ID fetching, use existing cs_ai_ids.txt")
     
     args = parser.parse_args()
     
     downloader = ArxivDownloader(args.storage_path)
     
     try:
-        # Fetch IDs
-        paper_ids = downloader.fetch_paper_ids(args.categories, args.min_date)
+        # Fetch or load IDs
+        if args.skip_fetch:
+            # Load existing IDs from cache file
+            if downloader.ids_file.exists():
+                with downloader.ids_file.open('r') as f:
+                    paper_ids = [line.strip() for line in f if line.strip()]
+                downloader.logger.info(f"Loaded {len(paper_ids)} IDs from cache (--skip-fetch)")
+            else:
+                downloader.logger.error(f"--skip-fetch specified but {downloader.ids_file} not found")
+                sys.exit(1)
+        else:
+            paper_ids = downloader.fetch_paper_ids(args.categories, args.min_date)
+        
         if args.max_papers:
             paper_ids = paper_ids[:args.max_papers]
+            downloader.logger.info(f"Limited to {len(paper_ids)} papers (--max-papers)")
         
         # Download with retries (or fetch metadata only if --skip-pdfs)
         downloader.download_papers(paper_ids, max_workers=args.max_workers, max_retries=3, skip_pdfs=args.skip_pdfs)
