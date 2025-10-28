@@ -334,10 +334,12 @@ class ArxivDownloader:
         self.logger.info(f"Using arxiv.py with 3-second delays (arXiv ToU compliant)")
         
         # Create search with unlimited results
+        # Note: Use SortOrder.Ascending with SubmittedDate to paginate through large result sets
         search = arxiv.Search(
             query=full_query,
             max_results=float('inf'),  # Fetch ALL available results
-            sort_by=arxiv.SortCriterion.SubmittedDate
+            sort_by=arxiv.SortCriterion.SubmittedDate,
+            sort_order=arxiv.SortOrder.Ascending  # CRITICAL: Ascending enables pagination for large sets
         )
         
         # Fetch using generator (handles pagination automatically)
