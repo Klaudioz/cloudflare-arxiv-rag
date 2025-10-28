@@ -1139,46 +1139,62 @@ cloudflare dashboard → Billing & Usage
 - Production deployment initiated (run ID: 18849928158)
 - URL: `https://cloudflare-arxiv-rag.klaudioz.workers.dev` (when complete)
 
-### Phase 16: Bulk Paper Import (Oct 27, 2025 - IN PROGRESS)
+### Phase 16: Bulk Paper Import ✅ FIXED (Oct 28, 2025)
 
-**Script Created**: `scripts/download_and_ingest_cs_ai.py`
-- Downloads 6000 CS.AI papers from arXiv S3 (~10.58 GB)
-- Parallel downloads (8 concurrent) with automatic retry
-- PDF text extraction via pdfplumber (with fallback to arXiv abstract)
-- Generates JSONL manifest for ingestion: `storage/cs-ai-papers.jsonl`
-- Fully resumable on interruption
-- Progress tracking and logging
+**Script Fixed**: `scripts/download_and_ingest_cs_ai.py`
+- Now downloads ALL 452,970 CS.AI papers (not just 6,000!)
+- Replaced manual API loop with `arxiv.py` library
+- Automatic pagination handling (no manual start/max_results loops)
+- **Mandatory 3-second delays** enforced (arXiv Terms of Use requirement)
+- Fixed deprecated `datetime.utcnow()` → `datetime.now(datetime.timezone.utc)`
+- Graceful error handling for `UnexpectedEmptyPageError`
+- Code reduced: 541 lines → 111 lines (net -430 lines!)
 
-**Integration Service Updated**: `src/services/ingestion-service.ts`
-- Added `bulkIngestFromJsonl()` method for batch processing
-- Processes papers in configurable batches (default: 500 per batch)
-- Tracks duplicates and errors separately
-- Returns detailed statistics (BulkIngestionResult)
+**What Changed** (Oct 28, 2025 fix):
+- **Before**: Manual XML parsing broke on empty batches, only fetched 25 papers
+- **After**: arxiv.py generator pattern handles all 452,970 papers automatically
+- Automatic retry logic (num_retries=3) included
+- Memory efficient (generator pattern, no loading all results in memory)
 
-**Documentation Updated**: `README.md`
-- Added "Bulk Import: 6000 CS.AI Papers" section
-- Prerequisite installation: `pip install requests pdfplumber tqdm`
-- AWS CLI configuration for requester-pays access
-- Commands for full download and test mode
-- Troubleshooting guide for common issues
-- Resumption information
-
-**Storage Structure Created**:
-- Added `/storage/` to `.gitignore`
-- Downloads go to: `storage/cs-ai-pdfs/`
-- Manifest generated: `storage/cs-ai-papers.jsonl`
-- Progress log: `storage/download_log.txt`
-
-**Usage**:
+**Install & Run**:
 ```bash
-# Test mode (100 papers)
+# Install arxiv library (one-time)
+pip install requests pdfplumber tqdm arxiv
+
+# Quick test (100 papers, ~15 minutes)
 python scripts/download_and_ingest_cs_ai.py --storage-path ./storage --max-papers 100
 
-# Full download (6000 papers, ~4-8 hours)
-python scripts/download_and_ingest_cs_ai.py --storage-path ./storage
+# Full download (452,970 papers, ~25-30 hours)
+nohup python scripts/download_and_ingest_cs_ai.py --storage-path ./storage > download.log 2>&1 &
+tail -f ./storage/download.log  # Monitor progress
 ```
 
-**Next Step**: Execute download script (Phase 16 continued)
+**Output Files**:
+```
+./storage/
+├── cs_ai_ids.txt              # All 452,970 paper IDs (cache)
+├── cs-ai-pdfs/                # Downloaded PDFs (~10.58 GB)
+├── cs-ai-papers.jsonl         # Ready for AI Search ingestion
+├── metadata.jsonl             # Intermediate metadata
+└── download.log               # Progress log
+```
+
+**Upload to R2 & Ingest**:
+```bash
+# Upload to R2
+wrangler r2 object put arxiv-papers-prod/cs-ai-papers.jsonl \
+  --file ./storage/cs-ai-papers.jsonl
+
+# Trigger AI Search ingestion
+curl -X POST https://cloudflare-arxiv-rag-prod.klaudioz.workers.dev/api/v1/ingest/bulk \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_ADMIN_API_KEY" \
+  -d '{"source": "r2://arxiv-papers-prod/cs-ai-papers.jsonl", "batch_size": 500}'
+```
+
+**Git Commit**:
+- Commit: `4066fe4`
+- Message: "fix: Replace manual arXiv API loop with arxiv.py library for 452k paper support"
 
 ---
 

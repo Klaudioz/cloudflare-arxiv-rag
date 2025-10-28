@@ -73,52 +73,103 @@ npm run test -- --run
 wrangler deploy --env production
 ```
 
-## Bulk Import: 6000 CS.AI Papers
+## Bulk Import: 452k CS.AI Papers (Fixed October 28, 2025)
 
-Download and ingest all 6000 CS.AI papers (~10.58 GB) into your RAG system:
+Download all 452,970 CS.AI papers and ingest into AI Search. Script now uses `arxiv.py` library with proper pagination, 3-second delays (arXiv ToU compliant), and fixed `datetime.utcnow()` deprecation.
 
 ### Prerequisites
 
 ```bash
-# Install Python dependencies
-pip install requests pdfplumber tqdm
-
-# Configure AWS CLI for requester-pays access
-aws configure
-# Enter your AWS credentials (uses your $100+ credits for arXiv access)
-
-# Verify AWS access
-aws s3 ls s3://arxiv --request-payer requester
+# Install Python dependencies (arxiv.py now included!)
+pip install requests pdfplumber tqdm arxiv
 ```
 
-### Download & Process
+### Download All Papers (452,970 total)
 
 ```bash
-# Full download (estimated time: 4-8 hours, requires 11 GB free space)
-python scripts/download_and_ingest_cs_ai.py --storage-path ./storage
+# Full download (estimated time: 25-30 hours, requires ~11 GB space)
+# Runs in background with automatic resume capability
+nohup python scripts/download_and_ingest_cs_ai.py --storage-path ./storage > download.log 2>&1 &
 
-# Test mode (download first 100 papers to verify setup)
+# Monitor progress in real-time
+tail -f ./storage/download.log
+
+# Quick test first (100 papers, ~15 minutes)
 python scripts/download_and_ingest_cs_ai.py --storage-path ./storage --max-papers 100
 ```
 
-### What This Does
+**What the script does:**
+- Fetches all 452,970 paper IDs from arXiv API (~11 minutes with mandatory 3-second delays)
+- Downloads PDFs in parallel (8 concurrent workers with retry logic)
+- Extracts text from first 3 pages of each PDF
+- Generates `cs-ai-papers.jsonl` ready for ingestion
+- Fully resumable: rerun same command to continue if interrupted
+- Uses arxiv.py with proper error handling
 
-1. **Fetches metadata** from arXiv API (6000 paper IDs)
-2. **Parallel downloads** PDFs from S3 (8 concurrent, with retry logic)
-3. **Extracts text** from PDFs (first 3 pages for context)
-4. **Generates JSONL** manifest (`storage/cs-ai-papers.jsonl`)
-5. **Resumes automatically** if interrupted
-
-### Output
-
-After completion, you'll have:
+**Output files:**
 ```
-storage/
-├── cs-ai-pdfs/           # 6000 downloaded PDFs (~10.58 GB)
-├── cs-ai-papers.jsonl    # Ingestion manifest (one JSON per line)
-├── cs_ai_ids.txt         # Paper IDs (for resume)
-└── download_log.txt      # Download progress log
+./storage/
+├── cs_ai_ids.txt              # All 452,970 paper IDs (cache)
+├── cs-ai-pdfs/                # Downloaded PDFs
+├── cs-ai-papers.jsonl         # Ready for AI Search ingestion
+├── metadata.jsonl             # Intermediate metadata
+└── download.log               # Progress log
 ```
+
+### Upload to R2 for AI Search
+
+Once download completes:
+
+```bash
+# Upload ingestion manifest to R2 bucket
+wrangler r2 object put arxiv-papers-prod/cs-ai-papers.jsonl \
+  --file ./storage/cs-ai-papers.jsonl
+
+# Verify upload
+wrangler r2 object head arxiv-papers-prod/cs-ai-papers.jsonl
+```
+
+**Alternative: Using AWS CLI**
+```bash
+aws s3 cp ./storage/cs-ai-papers.jsonl \
+  s3://arxiv-papers-prod/cs-ai-papers.jsonl \
+  --endpoint-url https://<account-id>.r2.amazonaws.com
+```
+
+### Trigger AI Search Ingestion
+
+```bash
+# Start bulk ingestion (processes 500 papers per batch)
+curl -X POST https://cloudflare-arxiv-rag-prod.klaudioz.workers.dev/api/v1/ingest/bulk \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_ADMIN_API_KEY" \
+  -d '{
+    "source": "r2://arxiv-papers-prod/cs-ai-papers.jsonl",
+    "batch_size": 500
+  }'
+```
+
+**Expected response:**
+```json
+{
+  "status": "success",
+  "result": {
+    "totalPapers": 452970,
+    "successfulPapers": 450520,
+    "totalChunks": 900000,
+    "totalEmbeddings": 900000,
+    "batchCount": 906,
+    "duration": "14400s"
+  }
+}
+```
+
+This will:
+- ✅ Read JSONL from R2 bucket
+- ✅ Create AI Search index automatically
+- ✅ Process papers in batches
+- ✅ Generate embeddings via Workers AI
+- ✅ Enable hybrid search (BM25 + vector similarity)
 
 ### Next Steps
 
