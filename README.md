@@ -81,39 +81,102 @@ Download all 452,970 CS.AI papers and ingest into AI Search. Script now uses `ar
 
 ```bash
 # Install Python dependencies (arxiv.py now included!)
-pip install requests pdfplumber tqdm arxiv
+pip install requests pdfplumber tqdm arxiv python-dateutil
 ```
 
-### Download All Papers (452,970 total)
+### Download Process: 3 Stages
+
+The download script has **3 sequential stages**, each resumable independently:
+
+#### Stage 1: Fetch Paper IDs (~20 minutes)
+```bash
+# Fetches all 452,970 paper IDs using monthly date chunking
+# Output: storage/cs_ai_ids.txt (2.7 MB, 254,275 papers per 5 categories)
+# Resumable: If interrupted, rerun command to continue monthly chunking
+python scripts/download_and_ingest_cs_ai.py --storage-path ./storage
+
+# To skip this stage if IDs already fetched, use: --skip-fetch
+```
+
+**What happens:**
+- Splits Feb 2017 - Oct 2025 into 105 monthly chunks
+- Each month queries independently to work around API pagination limits
+- Deduplicates across months and categories
+- Saves to `storage/cs_ai_ids.txt`
+
+#### Stage 2: Fetch Metadata (~45 minutes)
+```bash
+# Automatically runs after Stage 1
+# Downloads metadata for each paper (abstracts, authors, dates, etc.)
+# Output: storage/metadata.jsonl (growing file during fetch)
+# Resumable: If interrupted, use --skip-fetch to reuse IDs and continue
+
+python scripts/download_and_ingest_cs_ai.py --storage-path ./storage --skip-fetch --skip-pdfs
+```
+
+**What happens:**
+- Makes parallel API calls (8 concurrent workers) to fetch paper metadata
+- Uses abstracts instead of full PDFs to avoid reCAPTCHA blocking
+- Progress shown as `Download P1: XX%` with ETA
+- Saves intermediate results to `storage/metadata.jsonl`
+- Deduplicates and normalizes metadata
+
+#### Stage 3: Generate Final JSONL (~5 minutes)
+```bash
+# Automatically runs after Stage 2
+# Generates final ingestion manifest
+# Output: storage/cs-ai-papers.jsonl (ready for R2 upload)
+
+python scripts/download_and_ingest_cs_ai.py --storage-path ./storage --skip-fetch --skip-pdfs
+```
+
+**What happens:**
+- Reads completed metadata.jsonl
+- Generates `cs-ai-papers.jsonl` with structured documents for AI Search
+- Includes: paper ID, title, authors, abstract, categories, dates
+- Format: One JSON object per line (JSONL/NDJSON)
+
+### Quick Start (Full Pipeline)
 
 ```bash
-# Full download (estimated time: 25-30 hours, requires ~11 GB space)
-# Runs in background with automatic resume capability
-nohup python scripts/download_and_ingest_cs_ai.py --storage-path ./storage > download.log 2>&1 &
+# Full download (estimated time: ~70 minutes total)
+# Runs all 3 stages automatically
+nohup python scripts/download_and_ingest_cs_ai.py --storage-path ./storage --skip-pdfs > download.log 2>&1 &
 
 # Monitor progress in real-time
 tail -f ./storage/download.log
 
 # Quick test first (100 papers, ~15 minutes)
-python scripts/download_and_ingest_cs_ai.py --storage-path ./storage --max-papers 100
+python scripts/download_and_ingest_cs_ai.py --storage-path ./storage --skip-pdfs --max-papers 100
 ```
 
-**What the script does:**
-- Fetches all 452,970 paper IDs from arXiv API (~11 minutes with mandatory 3-second delays)
-- Downloads PDFs in parallel (8 concurrent workers with retry logic)
-- Extracts text from first 3 pages of each PDF
-- Generates `cs-ai-papers.jsonl` ready for ingestion
-- Fully resumable: rerun same command to continue if interrupted
-- Uses arxiv.py with proper error handling
+### Resume Individual Stages
+
+**Resume from IDs (skip Stage 1):**
+```bash
+python scripts/download_and_ingest_cs_ai.py --storage-path ./storage --skip-pdfs --skip-fetch
+```
+
+**Use existing metadata (skip Stages 1 & 2):**
+```bash
+python scripts/download_and_ingest_cs_ai.py --storage-path ./storage --skip-pdfs --skip-fetch --use-existing-metadata
+```
+
+**Get PDFs instead of metadata only:**
+```bash
+# Remove --skip-pdfs to download actual PDF files (~11 GB)
+# Takes additional 8-10 hours for PDF downloads + text extraction
+python scripts/download_and_ingest_cs_ai.py --storage-path ./storage --skip-fetch
+```
 
 **Output files:**
 ```
 ./storage/
-├── cs_ai_ids.txt              # All 452,970 paper IDs (cache)
-├── cs-ai-pdfs/                # Downloaded PDFs
-├── cs-ai-papers.jsonl         # Ready for AI Search ingestion
-├── metadata.jsonl             # Intermediate metadata
-└── download.log               # Progress log
+├── cs_ai_ids.txt              # All 254,275 paper IDs (Stage 1 output)
+├── metadata.jsonl             # Fetched metadata (Stage 2 output)
+├── cs-ai-papers.jsonl         # Final JSONL for ingestion (Stage 3 output)
+├── cs-ai-pdfs/                # Downloaded PDFs (optional, --skip-pdfs skips this)
+└── download.log               # Full progress log
 ```
 
 ### Upload to R2 for AI Search

@@ -1143,39 +1143,65 @@ cloudflare dashboard → Billing & Usage
 
 **Script Fixed**: `scripts/download_and_ingest_cs_ai.py`
 - Now downloads ALL 452,970 CS.AI papers (not just 6,000!)
-- Replaced manual API loop with `arxiv.py` library
-- Automatic pagination handling (no manual start/max_results loops)
+- Replaced manual API loop with `arxiv.py` library + monthly date chunking
+- Automatic pagination handling via stage-based pipeline
 - **Mandatory 3-second delays** enforced (arXiv Terms of Use requirement)
 - Fixed deprecated `datetime.utcnow()` → `datetime.now(datetime.timezone.utc)`
-- Graceful error handling for `UnexpectedEmptyPageError`
+- Added `--skip-fetch` and `--use-existing-metadata` for resumable downloads
 - Code reduced: 541 lines → 111 lines (net -430 lines!)
 
-**What Changed** (Oct 28, 2025 fix):
-- **Before**: Manual XML parsing broke on empty batches, only fetched 25 papers
-- **After**: arxiv.py generator pattern handles all 452,970 papers automatically
-- Automatic retry logic (num_retries=3) included
-- Memory efficient (generator pattern, no loading all results in memory)
+**3-Stage Download Pipeline** (Oct 28, 2025 enhancement):
+
+**Stage 1: Fetch Paper IDs** (~20 min)
+```bash
+# Splits Feb 2017 - Oct 2025 into 105 monthly chunks
+# Works around arXiv API pagination limits on complex queries
+python scripts/download_and_ingest_cs_ai.py --storage-path ./storage
+# Output: storage/cs_ai_ids.txt (254,275 papers)
+```
+
+**Stage 2: Fetch Metadata** (~45 min)
+```bash
+# Downloads abstracts, authors, dates for each paper
+# 8 parallel workers with retry logic
+# Use --skip-fetch to reuse already-fetched IDs
+python scripts/download_and_ingest_cs_ai.py --storage-path ./storage --skip-pdfs --skip-fetch
+# Output: storage/metadata.jsonl (growing during fetch)
+```
+
+**Stage 3: Generate Final JSONL** (~5 min)
+```bash
+# Automatically runs after Stage 2
+# Generates JSONL ready for R2 upload and AI Search ingestion
+# Output: storage/cs-ai-papers.jsonl
+```
 
 **Install & Run**:
 ```bash
-# Install arxiv library (one-time)
-pip install requests pdfplumber tqdm arxiv
+# Install dependencies (one-time)
+pip install requests pdfplumber tqdm arxiv python-dateutil
 
 # Quick test (100 papers, ~15 minutes)
-python scripts/download_and_ingest_cs_ai.py --storage-path ./storage --max-papers 100
+python scripts/download_and_ingest_cs_ai.py --storage-path ./storage --skip-pdfs --max-papers 100
 
-# Full download (452,970 papers, ~25-30 hours)
-nohup python scripts/download_and_ingest_cs_ai.py --storage-path ./storage > download.log 2>&1 &
+# Full pipeline with --skip-pdfs (metadata only, ~70 minutes)
+nohup python scripts/download_and_ingest_cs_ai.py --storage-path ./storage --skip-pdfs > download.log 2>&1 &
 tail -f ./storage/download.log  # Monitor progress
+
+# Resume from IDs (if interrupted during metadata fetch)
+python scripts/download_and_ingest_cs_ai.py --storage-path ./storage --skip-pdfs --skip-fetch
+
+# Get actual PDFs instead of just metadata (~8+ more hours)
+python scripts/download_and_ingest_cs_ai.py --storage-path ./storage --skip-fetch
 ```
 
 **Output Files**:
 ```
 ./storage/
-├── cs_ai_ids.txt              # All 452,970 paper IDs (cache)
-├── cs-ai-pdfs/                # Downloaded PDFs (~10.58 GB)
-├── cs-ai-papers.jsonl         # Ready for AI Search ingestion
-├── metadata.jsonl             # Intermediate metadata
+├── cs_ai_ids.txt              # All 254,275 paper IDs (Stage 1)
+├── metadata.jsonl             # Fetched metadata (Stage 2)
+├── cs-ai-papers.jsonl         # Final JSONL for ingestion (Stage 3)
+├── cs-ai-pdfs/                # Downloaded PDFs (optional)
 └── download.log               # Progress log
 ```
 
@@ -1192,9 +1218,13 @@ curl -X POST https://cloudflare-arxiv-rag-prod.klaudioz.workers.dev/api/v1/inges
   -d '{"source": "r2://arxiv-papers-prod/cs-ai-papers.jsonl", "batch_size": 500}'
 ```
 
-**Git Commit**:
-- Commit: `4066fe4`
-- Message: "fix: Replace manual arXiv API loop with arxiv.py library for 452k paper support"
+**Git Commits**:
+- `36fd75b` - "feat: Add --skip-fetch parameter to reuse existing cs_ai_ids.txt"
+- `21e6381` - "feat: Implement monthly date chunking to fetch all 452k papers"
+- `980304b` - "fix: Use ascending sort order to improve pagination"
+- `91ebaa5` - "feat: Add --skip-pdfs flag to avoid arXiv reCAPTCHA"
+- `ae3ba30` - "fix: Import timezone from datetime module"
+- `4066fe4` - "fix: Replace manual arXiv API loop with arxiv.py library"
 
 ---
 
